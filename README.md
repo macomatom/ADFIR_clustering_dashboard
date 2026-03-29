@@ -2,9 +2,7 @@
 
 Standalone Streamlit dashboard for browsing precomputed ADFIR agglomerative cluster exports.
 
-The repository already contains one bundled export:
-
-- `Magnet_CTF_2022_Windows_Laptop | sum | 60s | k=10..30`
+The repository contains one bundled export: `Magnet_CTF_2022_Windows_Laptop | sum | 60s | k=10..30`
 
 ## Included
 
@@ -26,6 +24,38 @@ Requirements:
 
 - Python 3.11+
 - `uv`
+
+## Install uv
+
+Official uv installation docs:
+
+- https://docs.astral.sh/uv/getting-started/installation/
+
+Recommended install methods:
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Windows with WinGet:
+
+```powershell
+winget install --id=astral-sh.uv -e
+```
+
+macOS / Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+After installation, open a new terminal and verify:
+
+```powershell
+uv --version
+```
 
 Run:
 
