@@ -1,3 +1,0 @@
-selection_track,selected_cut_dir,selected_cut_value,selected_cut_score,run_dir
-behavior_profiling,k12,12.0,0.6585010271709923,analysis_outputs\clustering\with_entropy\Magnet_CTF_2022_Windows_Laptop\sum\60s\clustering\agglomerative\k12
-incident_hunting,k30,30.0,2.401465985163589,analysis_outputs\clustering\with_entropy\Magnet_CTF_2022_Windows_Laptop\sum\60s\clustering\agglomerative\k30
