@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "scope": "per_dataset",
+  "allowed_scopes": [
+    "combined"
+  ],
+  "rows": 4745,
+  "max_rows": 2000,
+  "method": "agglomerative",
+  "linkage": "ward",
+  "top_levels": 10,
+  "display_levels": 12,
+  "selected_k": 10,
+  "cut_mode": "k",
+  "cut_value": 10.0,
+  "written": false,
+  "written_cut_level": false,
+  "skip_reason": "scope_not_allowed"
+}

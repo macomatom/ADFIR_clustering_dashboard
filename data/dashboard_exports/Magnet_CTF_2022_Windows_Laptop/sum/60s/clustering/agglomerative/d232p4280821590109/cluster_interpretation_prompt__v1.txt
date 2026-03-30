@@ -1,0 +1,27 @@
+You are a forensic analyst. Explain these clusters and infer what behavior modes they likely represent.
+Method: agglomerative, cut_mode: distance, cut_value: 232.4280821590109, linkage: ward
+
+Context and constraints:
+- is_attack_related is a compromised-state label; it is not exact attack-onset ground truth.
+- Small clusters can be meaningful incident micro-patterns.
+- Compare both attack enrichment and behavioral characteristics (row_nonzero_*, row_signal_*).
+
+Focus on:
+1) what each cluster likely represents,
+2) suspicious vs benign-looking clusters (including micro-clusters),
+3) concrete hypotheses to validate in forensic timeline,
+4) which clusters to prioritize for manual investigation.
+
+Cluster table (all clusters, sorted by attack_lift_vs_global; count=5):
+method,cut_mode,cut_value,linkage,cluster_id,cluster_size,cluster_frac,attack_count,attack_rate,attack_lift_vs_global,dominant_artifact,dominant_artifact_frac,row_nonzero_mean,row_nonzero_median,row_nonzero_p95,row_nonzero_lift_vs_global,row_signal_mean,row_signal_median,row_signal_p95,row_signal_lift_vs_global,phase_pre_count,phase_incident_count,phase_post_count,phase_pre_frac,phase_incident_frac,phase_post_frac,time_cluster_min,time_cluster_max,top_features,top_features_characteristics
+agglomerative,distance,232.4280821590109,ward,0,21,0.004425711275026343,8,0.38095238095238093,2.738816738816739,Magnet_CTF_2022_Windows_Laptop,1.0,52.61904761904762,55.0,67.0,3.4313783234938215,16464.51305695479,2429.210137459498,50827.58803734847,10.636326437921825,12,0,9,0.5714285714285714,0.0,0.42857142857142855,2022-02-04 07:05:00,2022-02-12 19:23:00,mask_NTFS_file_stat | has_macb_accessed | is_standard_info | has_macb_modified | mask_Registry_Key,mask_NTFS_file_stat | has_macb_accessed | is_standard_info | has_macb_modified | mask_Registry_Key
+agglomerative,distance,232.4280821590109,ward,4,4,0.0008429926238145417,1,0.25,1.7973484848484849,Magnet_CTF_2022_Windows_Laptop,1.0,60.25,68.5,70.7,3.92900581339417,10926.065605024893,13114.278723771931,16772.138532996527,7.058404949796245,3,0,1,0.75,0.0,0.25,2022-02-04 07:08:00,2022-02-12 01:47:00,mask_NTFS_file_stat | is_from_users_dir | is_standard_info | is_in_appdata | is_ntfs,mask_NTFS_file_stat | is_from_users_dir | is_standard_info | is_in_appdata | is_ntfs
+agglomerative,distance,232.4280821590109,ward,2,3464,0.7300316122233931,490,0.14145496535796767,1.0169754706417524,Magnet_CTF_2022_Windows_Laptop,1.0,10.139145496535797,9.0,20.0,0.6611910638794766,9.246735291867061,2.65450632239254,38.78752069817113,0.005973531965939664,2054,1,1409,0.5929561200923787,0.0002886836027713626,0.4067551963048499,2022-02-04 07:39:00,2022-02-13 08:02:00,mask_Amcache_Registry_Entry | account_creation | account_deletion | accessed_sensitive_file | HasAandBNoMC,mask_Amcache_Registry_Entry | account_creation | account_deletion | accessed_sensitive_file | HasAandBNoMC
+agglomerative,distance,232.4280821590109,ward,3,74,0.01559536354056902,10,0.13513513513513514,0.9715397215397217,Magnet_CTF_2022_Windows_Laptop,1.0,52.28378378378378,54.0,68.35,3.4095151939042374,61688.404815425114,11472.847724749425,263041.43688412325,39.85164995659379,42,0,32,0.5675675675675675,0.0,0.43243243243243246,2022-02-04 07:15:00,2022-02-12 23:39:00,mask_NTFS_file_stat | is_ntfs | mask_File_stat | has_macb_accessed | is_standard_info,mask_NTFS_file_stat | is_ntfs | mask_File_stat | has_macb_accessed | is_standard_info
+agglomerative,distance,232.4280821590109,ward,1,1182,0.24910432033719704,151,0.12774957698815567,0.9184420345587859,Magnet_CTF_2022_Windows_Laptop,1.0,27.4331641285956,28.0,43.0,1.788963673710349,1995.4282719298576,101.42414767316691,2533.679786928185,1.2890770841679369,695,0,487,0.5879864636209814,0.0,0.4120135363790186,2022-02-04 07:09:00,2022-02-13 11:17:00,has_sha256 | is_file | is_file_entry | is_standard_info | mask_NTFS_file_stat,has_sha256 | is_file | is_file_entry | is_standard_info | mask_NTFS_file_stat
+
+
+Return this structure:
+A) concise cluster-by-cluster interpretation,
+B) top 3 suspicious clusters with reason,
+C) recommended validation steps on source rows/time windows.
