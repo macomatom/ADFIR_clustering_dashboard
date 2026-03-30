@@ -9,6 +9,7 @@ TIMELINE_BAR_Y0 = 0.38
 TIMELINE_BAR_Y1 = 0.62
 TIMELINE_BAR_HEIGHT = TIMELINE_BAR_Y1 - TIMELINE_BAR_Y0
 TIMELINE_BAR_WIDTH_DEFAULT = 1.02
+ENTROPY_BAR_WIDTH_DEFAULT = 1.0
 
 
 def _build_attack_window_trace(timeline_df: pd.DataFrame) -> go.Scatter | None:
@@ -315,5 +316,244 @@ def build_timeline_plot(
             "zeroline": False,
             "range": [0.25, 0.75],
         },
+    )
+    return fig
+
+
+def build_entropy_plot(
+    entropy_df: pd.DataFrame,
+    *,
+    entropy_col: str,
+    window_s: int | None = None,
+    title: str = "Shannon Entropy Over Time",
+) -> go.Figure:
+    fig = go.Figure()
+    if entropy_df.empty or entropy_col not in entropy_df.columns:
+        fig.update_layout(title=title)
+        return fig
+
+    plot_df = entropy_df.copy()
+    plot_df[entropy_col] = pd.to_numeric(plot_df[entropy_col], errors="coerce")
+    plot_df = plot_df.dropna(subset=["timeline_x"])
+    if plot_df.empty:
+        fig.update_layout(title=title)
+        return fig
+
+    if pd.api.types.is_datetime64_any_dtype(plot_df["timeline_x"]) or pd.to_datetime(plot_df["timeline_x"], errors="coerce").notna().all():
+        plot_df["timeline_x"] = pd.to_datetime(plot_df["timeline_x"], errors="coerce")
+        if window_s and int(window_s) > 0:
+            full_x = pd.date_range(
+                start=plot_df["timeline_x"].dropna().min(),
+                end=plot_df["timeline_x"].dropna().max(),
+                freq=pd.Timedelta(seconds=int(window_s)),
+            )
+            plot_df = pd.DataFrame({"timeline_x": full_x}).merge(plot_df, on="timeline_x", how="left", sort=True)
+    else:
+        numeric_x = pd.to_numeric(plot_df["timeline_x"], errors="coerce")
+        if numeric_x.notna().all() and window_s and int(window_s) > 0:
+            start = int(numeric_x.min())
+            end = int(numeric_x.max())
+            full_x = list(range(start, end + int(window_s), int(window_s)))
+            plot_df = pd.DataFrame({"timeline_x": full_x}).merge(plot_df, on="timeline_x", how="left", sort=True)
+
+    plot_df["_is_missing"] = plot_df[entropy_col].isna()
+    observed_values = pd.to_numeric(plot_df.loc[~plot_df["_is_missing"], entropy_col], errors="coerce").dropna()
+    dataset_mean = float(observed_values.mean()) if not observed_values.empty else float("nan")
+    dataset_median = float(observed_values.median()) if not observed_values.empty else float("nan")
+    plot_df[entropy_col] = pd.to_numeric(plot_df[entropy_col], errors="coerce")
+    plot_top = max(
+        float(observed_values.max()) if not observed_values.empty else 0.0,
+        dataset_mean if pd.notna(dataset_mean) else 0.0,
+        dataset_median if pd.notna(dataset_median) else 0.0,
+        0.1,
+    )
+    plot_df["_missing_height"] = plot_top
+
+    missing_df = plot_df[plot_df["_is_missing"]].copy()
+    present_df = plot_df[~plot_df["_is_missing"]].copy()
+
+    missing_width = (
+        _compute_bar_width_values(
+            pd.Series(missing_df["timeline_x"]),
+            window_s=window_s,
+            bar_width_fraction=ENTROPY_BAR_WIDTH_DEFAULT,
+        )
+        if not missing_df.empty
+        else None
+    )
+    present_width = (
+        _compute_bar_width_values(
+            pd.Series(present_df["timeline_x"]),
+            window_s=window_s,
+            bar_width_fraction=ENTROPY_BAR_WIDTH_DEFAULT,
+        )
+        if not present_df.empty
+        else None
+    )
+
+    if not missing_df.empty:
+        missing_hover = pd.DataFrame(
+            {
+                "time_cluster": missing_df.get("time_cluster", missing_df["timeline_x"]).astype(str),
+                "row_idx": missing_df.get("row_idx", pd.Series([""] * len(missing_df), index=missing_df.index)),
+            }
+        ).to_numpy()
+        fig.add_trace(
+            go.Bar(
+                x=missing_df["timeline_x"],
+                y=missing_df["_missing_height"],
+                width=missing_width,
+                marker={"color": "rgb(220,220,220)", "line": {"width": 0}},
+                customdata=missing_hover,
+                hovertemplate=(
+                    "time_cluster=%{customdata[0]}<br>"
+                    "row_idx=%{customdata[1]}<br>"
+                    "missing data<extra></extra>"
+                ),
+                name="missing data",
+            )
+        )
+
+    if not present_df.empty:
+        hover_time = present_df["time_cluster"] if "time_cluster" in present_df.columns else present_df["timeline_x"]
+        hover_row = present_df["row_idx"] if "row_idx" in present_df.columns else pd.Series([""] * len(present_df), index=present_df.index)
+        customdata = pd.DataFrame(
+            {
+                "time_cluster": hover_time.astype(str),
+                "row_idx": hover_row,
+                "entropy": present_df[entropy_col],
+            }
+        ).to_numpy()
+
+        fig.add_trace(
+            go.Bar(
+                x=present_df["timeline_x"],
+                y=present_df[entropy_col],
+                width=present_width,
+                marker={"color": "rgb(52, 152, 219)", "line": {"width": 0}},
+                customdata=customdata,
+                hovertemplate=(
+                    "time_cluster=%{customdata[0]}<br>"
+                    "row_idx=%{customdata[1]}<br>"
+                    "global_shannon_entropy=%{customdata[2]:.6g}<extra></extra>"
+                ),
+                name="global_shannon_entropy",
+            )
+        )
+
+    ref_line_indices: list[int] = []
+    if not plot_df.empty and "timeline_x" in plot_df.columns:
+        line_x = [plot_df["timeline_x"].min(), plot_df["timeline_x"].max()]
+    else:
+        line_x = [0, 1]
+    if pd.notna(dataset_mean):
+        fig.add_trace(
+            go.Scatter(
+                x=line_x,
+                y=[dataset_mean, dataset_mean],
+                mode="lines",
+                name="dataset mean",
+                line={"color": "rgb(214,39,40)", "width": 2, "dash": "dash"},
+                hoverinfo="skip",
+                visible=True,
+            )
+        )
+        ref_line_indices.append(len(fig.data) - 1)
+    if pd.notna(dataset_median):
+        fig.add_trace(
+            go.Scatter(
+                x=line_x,
+                y=[dataset_median, dataset_median],
+                mode="lines",
+                name="dataset median",
+                line={"color": "rgb(214,39,40)", "width": 2, "dash": "dash"},
+                hoverinfo="skip",
+                visible=False,
+            )
+        )
+        ref_line_indices.append(len(fig.data) - 1)
+
+    mean_annotation = {
+        "xref": "paper",
+        "yref": "y",
+        "x": 0,
+        "y": dataset_mean,
+        "xanchor": "right",
+        "xshift": -8,
+        "text": f"{dataset_mean:.4f}",
+        "showarrow": False,
+        "font": {"color": "rgb(214,39,40)", "size": 12},
+        "bgcolor": "rgba(255,255,255,0.9)",
+        "visible": bool(pd.notna(dataset_mean)),
+    }
+    median_annotation = {
+        "xref": "paper",
+        "yref": "y",
+        "x": 0,
+        "y": dataset_median,
+        "xanchor": "right",
+        "xshift": -8,
+        "text": f"{dataset_median:.4f}",
+        "showarrow": False,
+        "font": {"color": "rgb(214,39,40)", "size": 12},
+        "bgcolor": "rgba(255,255,255,0.9)",
+        "visible": False,
+    }
+
+    default_annotations = []
+    if pd.notna(dataset_mean):
+        default_annotations.append(mean_annotation)
+    if pd.notna(dataset_median):
+        default_annotations.append(median_annotation)
+
+    fig.update_layout(
+        title=title,
+        barmode="overlay",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        updatemenus=[
+            {
+                "type": "buttons",
+                "direction": "right",
+                "x": 1.0,
+                "xanchor": "right",
+                "y": 1.22,
+                "yanchor": "top",
+                "showactive": True,
+                "buttons": [
+                    {
+                        "label": "Mean",
+                        "method": "update",
+                        "args": [
+                            {"visible": [True, False]},
+                            {"annotations": [mean_annotation, median_annotation]},
+                            ref_line_indices,
+                        ],
+                    },
+                    {
+                        "label": "Median",
+                        "method": "update",
+                        "args": [
+                            {"visible": [False, True]},
+                            {
+                                "annotations": [
+                                    {**mean_annotation, "visible": False},
+                                    {**median_annotation, "visible": True},
+                                ]
+                            },
+                            ref_line_indices,
+                        ],
+                    },
+                ],
+            }
+        ] if len(ref_line_indices) == 2 else [],
+        xaxis={"title": "time", "showgrid": False, "zeroline": False},
+        yaxis={"title": "global_shannon_entropy", "showgrid": False, "zeroline": False},
+        height=320,
+        bargap=0.0,
+        uirevision="entropy-static",
+        showlegend=True,
+        margin={"t": 80},
+        annotations=default_annotations,
     )
     return fig

@@ -34,9 +34,11 @@
   "assignments_file": "window_assignments_long__v1.csv",
   "summary_file": "cluster_summary_long__v1.csv",
   "features_file": "cluster_features_top10_long__v1.csv",
+  "window_metrics_file": "window_metrics__v1.csv",
   "time_col": "time_cluster",
   "label_col": "is_attack_related",
   "phase_col": "incident_phase_3class",
+  "entropy_default_col": "global_shannon_entropy",
   "feature_fields": [
     "rank",
     "feature_name",
@@ -55,5 +57,5 @@
   },
   "manual_exclude_list_enabled": true,
   "manual_exclude_list_size": 24,
-  "timestamp_utc": "2026-03-29T16:53:55Z"
+  "timestamp_utc": "2026-03-29T17:13:57Z"
 }

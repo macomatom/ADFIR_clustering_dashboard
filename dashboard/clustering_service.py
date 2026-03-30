@@ -9,9 +9,14 @@ from .data_loader import DashboardRunBundle
 
 def get_available_k(bundle: DashboardRunBundle) -> list[int]:
     manifest_values = [int(x) for x in bundle.manifest.get("available_k", [])]
+    filtered_manifest_values = [value for value in manifest_values if not (2 <= int(value) <= 6)]
+    if filtered_manifest_values:
+        return sorted(filtered_manifest_values)
     if manifest_values:
         return sorted(manifest_values)
-    return sorted(bundle.assignments["n_clusters"].dropna().astype(int).unique().tolist())
+    assignment_values = sorted(bundle.assignments["n_clusters"].dropna().astype(int).unique().tolist())
+    filtered_assignment_values = [value for value in assignment_values if not (2 <= int(value) <= 6)]
+    return filtered_assignment_values or assignment_values
 
 
 def get_assignments(bundle: DashboardRunBundle, n_clusters: int) -> pd.DataFrame:
@@ -59,6 +64,25 @@ def get_all_cluster_top_features(bundle: DashboardRunBundle, n_clusters: int) ->
     if "rank" in out.columns:
         out["rank"] = pd.to_numeric(out["rank"], errors="coerce")
         out = out.sort_values(["cluster_id", "rank", "feature_name"], ascending=[True, True, True]).reset_index(drop=True)
+    return out
+
+
+def get_window_metrics(bundle: DashboardRunBundle) -> pd.DataFrame:
+    return bundle.window_metrics.copy()
+
+
+def build_entropy_timeline_df(bundle: DashboardRunBundle) -> pd.DataFrame:
+    out = bundle.window_metrics.copy()
+    if out.empty:
+        return out
+    entropy_col = str(bundle.manifest.get("entropy_default_col") or "global_shannon_entropy")
+    if entropy_col not in out.columns:
+        return pd.DataFrame(columns=["timeline_x", "row_idx", entropy_col])
+    time_col = "time_cluster" if "time_cluster" in out.columns else "row_idx"
+    out["timeline_x"] = out[time_col]
+    sort_cols = [col for col in [time_col, "row_idx"] if col in out.columns]
+    if sort_cols:
+        out = out.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
     return out
 
 

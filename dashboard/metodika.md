@@ -147,10 +147,12 @@ Kombinovať:
 * **Štandardizovaný score pre ranking:**
 
   * `score_std`
+  * kde `score_std = (cluster_value - global_value) / (global_std + 1e-8)`
+  * `global_std` sa ráta ako populačná smerodajná odchýlka v raw priestore, teda `std(ddof=0)`
 
 * **Obojsmerná interpretácia:**
 
-  * ranking podľa `abs(score)`
+  * ranking podľa `abs(score_std)`
   * rozlíšiť:
 
     * **elevated features**
