@@ -1,33 +1,50 @@
 # ADFIR Cluster Dashboard
 
-Standalone Streamlit dashboard for browsing precomputed ADFIR agglomerative cluster exports.
+Standalone Streamlit dashboard for browsing precomputed ADFIR cluster outputs.
 
-The repository contains one bundled export: `Magnet_CTF_2022_Windows_Laptop | sum | 60s | k=10..30`
+The repository already contains bundled data for:
 
-## Included
+- `Magnet_CTF_2022_Windows_Laptop`
+- aggregation `sum`
+- window size `60s`
+- agglomerative clustering
+- `k = 10..30`
+
+The application can read both:
+
+- standalone dashboard exports with `dashboard_manifest__v1.json`
+- direct clustering outputs with `cluster_manifest__v1.json`
+
+## What Is Included
 
 - Streamlit dashboard UI
-- bundled dashboard export data for immediate use
 - standalone `pyproject.toml`
 - standalone `uv.lock`
+- bundled data under `data/dashboard_exports/...`
 
-The dashboard reads one export directory containing:
+## Installation
 
-- `dashboard_manifest__v1.json`
-- `window_assignments_long__v1.csv`
-- `cluster_summary_long__v1.csv`
-- `cluster_features_top10_long__v1.csv`
+### 1. Prerequisites
 
-## Quick Start
+Required:
 
-Requirements:
-
-- Python 3.11+
+- Python `3.11+`
 - `uv`
 
-## Install uv
+Project metadata currently targets:
 
-Official uv installation docs:
+- Python `>=3.11,<3.14`
+
+### 2. Clone the Repository
+
+```powershell
+git clone https://github.com/macomatom/ADFIR_clustering_dashboard.git
+cd ADFIR_clustering_dashboard
+```
+
+### 3. Install `uv`
+
+Official docs:
 
 - https://docs.astral.sh/uv/getting-started/installation/
 
@@ -51,69 +68,39 @@ macOS / Linux:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-After installation, open a new terminal and verify:
+Verify installation:
 
 ```powershell
 uv --version
 ```
 
-Run:
+### 4. Install Project Dependencies
 
 ```powershell
 uv sync
+```
+
+This creates the local virtual environment and installs all required packages.
+
+## Running the Dashboard
+
+### 5. Start Streamlit
+
+```powershell
 uv run streamlit run app.py
 ```
 
-After launch, the bundled export is selected automatically.
-
-## Use Your Own Export
-
-One export directory:
-
-```powershell
-uv run streamlit run app.py -- --run-dir path\to\dashboard\agglomerative
-```
-
-Root with multiple exports:
-
-```powershell
-uv run streamlit run app.py -- --runs-root path\to\dashboard_exports
-```
-
-You can also paste the export path directly into the sidebar.
-
-## Bundled Data
-
-Bundled export path:
-
-```text
-data/dashboard_exports/Magnet_CTF_2022_Windows_Laptop/sum/60s/dashboard/agglomerative
-```
-
-## Intended Scope
-
-- visualization only
-- no clustering is executed inside this repository
-- export generation stays in the main analysis repository
-
-## Minimal Export Contract
-
-The dashboard expects the same schema as the bundled files. At minimum:
-
-- assignments CSV with `window_id`, `time_cluster` or `row_idx`, `n_clusters`, `cluster_id`
-- summary CSV with `n_clusters`, `cluster_id`, `cluster_size`, `cluster_frac`
-- features CSV with `n_clusters`, `cluster_id`, `rank`, `feature_name`, `delta_vs_global`, `cluster_value`, `global_value`
-- manifest JSON pointing to those files
+After startup, the dashboard will automatically select the newest bundled run from `data/dashboard_exports`.
 
 ## Troubleshooting
 
-If dependencies are not present:
+If dependencies are missing:
 
 ```powershell
 uv sync
 ```
 
-If you want to rebuild the environment from scratch:
+If you want to rebuild the environment:
 
 ```powershell
 Remove-Item -Recurse -Force .venv
