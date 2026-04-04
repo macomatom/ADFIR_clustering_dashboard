@@ -31,12 +31,22 @@ def _format_distance_human(distance_windows: object, *, window_s: int | None) ->
     total_seconds = int(round(float(value) * float(window_s)))
     sign = "-" if total_seconds < 0 else ""
     seconds_abs = abs(total_seconds)
-    days, rem = divmod(seconds_abs, 86400)
+    months, rem = divmod(seconds_abs, 30 * 86400)
+    days, rem = divmod(rem, 86400)
     hours, rem = divmod(rem, 3600)
-    minutes, _ = divmod(rem, 60)
-    if days:
-        return f"{sign}{days}d {hours:02d}:{minutes:02d}"
-    return f"{sign}{hours:02d}:{minutes:02d}"
+    minutes, seconds = divmod(rem, 60)
+
+    parts: list[str] = []
+    if months:
+        parts.append(f"{months}mo")
+    if days or parts:
+        parts.append(f"{days}d")
+    if hours or parts:
+        parts.append(f"{hours}h")
+    if minutes or parts:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    return f"{sign}{' '.join(parts)}"
 
 
 def _load_child_bundle_for_k(bundle: DashboardRunBundle, n_clusters: int) -> DashboardRunBundle | None:
@@ -302,9 +312,14 @@ def get_cluster_detail_rows(bundle: DashboardRunBundle, n_clusters: int, cluster
         )
     else:
         detail["distance_from_incident_anchor"] = pd.Series([pd.NA] * len(detail), index=detail.index, dtype="Float64")
+    detail["abs_distance_from_incident_anchor"] = pd.to_numeric(detail["distance_from_incident_anchor"], errors="coerce").abs()
     detail["distance_from_incident_anchor_human"] = [
         _format_distance_human(value, window_s=int(bundle.manifest.get("window_s", 0) or 0))
         for value in detail["distance_from_incident_anchor"].tolist()
+    ]
+    detail["abs_distance_from_incident_anchor_human"] = [
+        _format_distance_human(value, window_s=int(bundle.manifest.get("window_s", 0) or 0))
+        for value in detail["abs_distance_from_incident_anchor"].tolist()
     ]
     detail = _sort_cluster_detail_rows(detail, time_col=time_col)
     total_rows = int(len(detail))

@@ -181,7 +181,6 @@ def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
         return detail_df
     priority = [
         "time_cluster",
-        "distance_from_incident_anchor_human",
         "distance_from_incident_anchor",
         "abs_distance_from_incident_anchor",
         "incident_phase_3class",
@@ -195,9 +194,16 @@ def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
     leading = [col for col in priority if col in detail_df.columns]
     remaining = [col for col in detail_df.columns if col not in leading]
     out = detail_df[leading + remaining].copy()
-    for col in ["distance_from_incident_anchor", "abs_distance_from_incident_anchor", "row_idx", "is_attack_related", "cluster_id", "n_clusters"]:
+    if "distance_from_incident_anchor_human" in out.columns and "distance_from_incident_anchor" in out.columns:
+        out["distance_from_incident_anchor"] = out["distance_from_incident_anchor_human"]
+    if "abs_distance_from_incident_anchor_human" in out.columns and "abs_distance_from_incident_anchor" in out.columns:
+        out["abs_distance_from_incident_anchor"] = out["abs_distance_from_incident_anchor_human"]
+    for col in ["row_idx", "is_attack_related", "cluster_id", "n_clusters"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
+    drop_cols = [col for col in ["distance_from_incident_anchor_human", "abs_distance_from_incident_anchor_human"] if col in out.columns]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
     return out
 
 

@@ -270,7 +270,7 @@ def main() -> None:
 
     default_k = min([k for k in available_k if 10 <= k <= 50], default=available_k[0])
     n_clusters = st.sidebar.selectbox("Number of clusters", options=available_k, index=available_k.index(default_k))
-    cluster_row_limit = st.sidebar.selectbox("Rows to show", options=[25, 50, 100, 250], index=0)
+    cluster_row_limit = st.sidebar.selectbox("Rows to show", options=[10, 25, 50, 100, 250], index=0)
 
     assignments = get_assignments(bundle, n_clusters)
     summary = get_cluster_summary(bundle, n_clusters)

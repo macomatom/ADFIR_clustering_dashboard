@@ -1,19 +1,14 @@
 {
-  "enabled": true,
-  "scope": "per_dataset",
-  "allowed_scopes": [
-    "per_dataset"
-  ],
-  "rows": 4745,
-  "max_rows": 20000,
+  "render_style_version": 2,
   "method": "agglomerative",
   "linkage": "ward",
-  "top_levels": 10,
-  "display_levels": 52,
   "selected_k": 50,
   "cut_mode": "k",
   "cut_value": 50.0,
+  "display_levels": 52,
+  "resolved_cut_height": 86.12943955225282,
   "written": true,
   "written_cut_level": false,
-  "skip_reason": ""
+  "skip_reason": "",
+  "linkage_matrix_file": "cluster_linkage_matrix__v1.npy"
 }
