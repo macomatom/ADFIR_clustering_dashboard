@@ -1,0 +1,37 @@
+{
+  "scope": "per_dataset",
+  "artifact": "Magnet_CTF_2019_Windows_Desktop",
+  "aggregation": "sum",
+  "window_s": 60,
+  "selected_k": 25,
+  "method": "agglomerative",
+  "cut_mode": "k",
+  "cut_value": 25,
+  "linkage": "ward",
+  "input_files": [
+    "parquet_data\\Magnet_CTF_2019_Windows_Desktop\\agg_sum_Magnet_CTF_2019_Windows_Desktop_60s.parquet"
+  ],
+  "rows": 18170,
+  "features_total": 189,
+  "random_state": 42,
+  "exclude_cols": [],
+  "corr_prune_thr": 0.0,
+  "corr_prune_dropped_count": 0,
+  "distance_jump_top": 5,
+  "distance_thresholds": [],
+  "dead_filter": {
+    "enabled": true,
+    "source": "analysis_outputs\\clustering\\with_entropy\\registry\\dead_feature_score__v1.csv",
+    "dead_records_pct_threshold": 100.0,
+    "dead_excluded_count": 19
+  },
+  "manual_exclude_list_enabled": true,
+  "manual_exclude_list_size": 24,
+  "include_entropy_features": false,
+  "sum_transform": "log1p_zscore",
+  "cluster_max_dim": 20,
+  "cluster_space_mode": "full",
+  "status": "success",
+  "warnings": [],
+  "timestamp_utc": "2026-04-04T08:34:59Z"
+}

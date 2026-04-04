@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -15,21 +17,27 @@ from dashboard.clustering_service import (
     build_summary_metrics,
     build_entropy_timeline_df,
     build_timeline_df,
+    filter_timeline_to_viewport,
+    get_default_timeline_viewport,
     get_all_cluster_top_features,
     get_assignments,
     get_available_k,
+    get_cluster_detail_rows,
     get_cluster_summary,
     get_cluster_top_features,
 )
-from dashboard.data_loader import DashboardRunBundle, discover_dashboard_runs, load_dashboard_run
+from dashboard.data_loader import DashboardRunBundle, DashboardRunOption, discover_dashboard_run_options, discover_dashboard_runs, load_dashboard_run
 from dashboard.grid_helpers import aggrid_available, render_feature_aggrid
+from dashboard.live_plotly_component import render_live_plotly
 from dashboard.plots import build_entropy_plot, build_timeline_plot
 from dashboard.ui_helpers import (
     build_cluster_option_labels,
     cluster_color_map,
     fill_cluster_summary_color_column,
     humanize_label,
+    render_cluster_detail_table_html,
     render_cluster_label_with_color,
+    render_cluster_detail_table,
     render_cluster_summary_dataframe,
     render_cluster_summary_context,
     render_feature_overview_table,
@@ -49,13 +57,27 @@ def _get_cached_all_features(run_dir: str, n_clusters: int) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def _get_cached_invariant_timeline(run_dir: str, time_col: str) -> pd.DataFrame:
+def _get_cached_invariant_timeline(run_dir: str, n_clusters: int, time_col: str) -> pd.DataFrame:
     bundle = _load_bundle(run_dir)
-    invariant_source = bundle.assignments.copy()
+    invariant_source = get_assignments(bundle, n_clusters).copy()
     dedupe_cols = [col for col in [time_col, "row_idx", "window_id"] if col in invariant_source.columns]
     if dedupe_cols:
         invariant_source = invariant_source.drop_duplicates(subset=dedupe_cols, keep="first")
     return build_timeline_df(invariant_source, time_col=time_col)
+
+
+@st.cache_data(show_spinner=False)
+def _get_cached_present_timeline(run_dir: str, n_clusters: int, time_col: str) -> pd.DataFrame:
+    bundle = _load_bundle(run_dir)
+    assignments = get_assignments(bundle, n_clusters).copy()
+    return build_timeline_df(assignments, time_col=time_col)
+
+
+@st.cache_data(show_spinner=False)
+def _get_cached_timeline_defaults(run_dir: str, n_clusters: int, time_col: str, window_s: int) -> dict[str, Any]:
+    bundle = _load_bundle(run_dir)
+    assignments = get_assignments(bundle, n_clusters).copy()
+    return get_default_timeline_viewport(assignments, time_col=time_col, window_s=window_s)
 
 
 def _resolve_default_run(root: Path) -> str:
@@ -63,15 +85,34 @@ def _resolve_default_run(root: Path) -> str:
     return str(runs[0]) if runs else ""
 
 
-def _resolve_default_root() -> Path:
-    candidates = [
-        PROJECT_ROOT.parent / "analysis_outputs" / "clustering" / "with_entropy",
-        PROJECT_ROOT / "data" / "dashboard_exports",
+@st.cache_data(show_spinner=False)
+def _discover_run_options(root: str) -> list[DashboardRunOption]:
+    return discover_dashboard_run_options(Path(root))
+
+
+def _preferred_run_options(options: list[DashboardRunOption]) -> list[DashboardRunOption]:
+    preferred = [
+        option
+        for option in options
+        if option.aggregation == "sum" and option.window_s == 60 and option.method == "agglomerative"
     ]
-    for candidate in candidates:
-        if candidate.exists() and discover_dashboard_runs(candidate):
-            return candidate
-    return candidates[0]
+    return preferred or options
+
+
+def _build_dataset_option_map(options: list[DashboardRunOption]) -> dict[str, DashboardRunOption]:
+    artifact_counts = Counter(option.artifact for option in options)
+    labels: dict[str, DashboardRunOption] = {}
+    for option in options:
+        label = option.artifact if artifact_counts[option.artifact] == 1 else option.label
+        labels[label] = option
+    return labels
+
+
+def _resolve_default_root() -> Path:
+    candidate = PROJECT_ROOT / "data" / "dashboard_exports"
+    if candidate.exists() and discover_dashboard_runs(candidate):
+        return candidate
+    return candidate
 
 
 def _parse_args() -> argparse.Namespace:
@@ -80,6 +121,104 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--runs-root", default="", help="Root directory containing one or more dashboard exports.")
     args, _ = parser.parse_known_args(sys.argv[1:])
     return args
+
+
+def _default_active_cluster(summary: pd.DataFrame, cluster_ids: list[int]) -> int:
+    if not cluster_ids:
+        raise ValueError("cluster_ids must not be empty")
+    if summary.empty or "cluster_id" not in summary.columns:
+        return int(cluster_ids[0])
+    ranked = summary.copy()
+    ranked["cluster_id"] = pd.to_numeric(ranked["cluster_id"], errors="coerce")
+    ranked = ranked[ranked["cluster_id"].notna()].copy()
+    if ranked.empty:
+        return int(cluster_ids[0])
+    ranked["closest_abs_distance_to_anchor"] = pd.to_numeric(ranked.get("closest_abs_distance_to_anchor"), errors="coerce")
+    ranked["attack_rate"] = pd.to_numeric(ranked.get("attack_rate"), errors="coerce")
+    ranked["cluster_size"] = pd.to_numeric(ranked.get("cluster_size"), errors="coerce")
+    ranked = ranked.sort_values(
+        ["closest_abs_distance_to_anchor", "attack_rate", "cluster_size", "cluster_id"],
+        ascending=[True, False, False, True],
+        na_position="last",
+    )
+    return int(ranked.iloc[0]["cluster_id"])
+
+
+def _serialize_axis_value(value: Any, *, time_mode: str | None) -> str | float | int | None:
+    if value is None or pd.isna(value):
+        return None
+    if time_mode == "datetime":
+        return pd.Timestamp(value).isoformat()
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
+def _deserialize_axis_value(value: Any, *, time_mode: str | None) -> Any:
+    if value in (None, ""):
+        return None
+    if time_mode == "datetime":
+        parsed = pd.to_datetime(value, errors="coerce")
+        return None if pd.isna(parsed) else parsed
+    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return None if pd.isna(parsed) else float(parsed)
+
+
+def _timeline_state_key(run_dir: str, n_clusters: int) -> str:
+    return f"timeline_viewport::{run_dir}::{n_clusters}"
+
+
+def _ensure_timeline_state(
+    run_dir: str,
+    n_clusters: int,
+    *,
+    defaults: dict[str, Any],
+) -> dict[str, Any]:
+    state_key = _timeline_state_key(run_dir, n_clusters)
+    if state_key not in st.session_state:
+        st.session_state[state_key] = {
+            "x_min": _serialize_axis_value(defaults.get("x_min"), time_mode=defaults.get("time_mode")),
+            "x_max": _serialize_axis_value(defaults.get("x_max"), time_mode=defaults.get("time_mode")),
+            "container_width_px": 1100,
+            "initialized": True,
+        }
+    return st.session_state[state_key]
+
+
+def _viewport_changed(old_value: Any, new_value: Any, *, time_mode: str | None) -> bool:
+    old_parsed = _deserialize_axis_value(old_value, time_mode=time_mode)
+    new_parsed = _deserialize_axis_value(new_value, time_mode=time_mode)
+    if old_parsed is None and new_parsed is None:
+        return False
+    if old_parsed is None or new_parsed is None:
+        return True
+    if time_mode == "datetime":
+        return pd.Timestamp(old_parsed) != pd.Timestamp(new_parsed)
+    return abs(float(old_parsed) - float(new_parsed)) > 1e-9
+
+
+def _compute_target_bars(container_width_px: Any) -> int:
+    width = pd.to_numeric(pd.Series([container_width_px]), errors="coerce").iloc[0]
+    if pd.isna(width):
+        return 600
+    # Use fewer bars than raw pixels so zooming progressively reveals detail.
+    return int(min(1400, max(300, int(float(width) * 0.55))))
+
+
+def _format_visible_span(x_min: Any, x_max: Any, *, time_mode: str | None) -> str:
+    if x_min is None or x_max is None:
+        return "full range"
+    if time_mode == "datetime":
+        delta = pd.Timestamp(x_max) - pd.Timestamp(x_min)
+        total_seconds = int(delta.total_seconds())
+        days, rem = divmod(max(total_seconds, 0), 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days:
+            return f"{days}d {hours:02d}:{minutes:02d}"
+        return f"{hours:02d}:{minutes:02d}"
+    return f"{float(x_max) - float(x_min):.2f}"
 
 
 def main() -> None:
@@ -91,7 +230,17 @@ def main() -> None:
     default_run = args.run_dir or _resolve_default_run(default_root)
 
     st.sidebar.header("Data")
-    run_dir = st.sidebar.text_input("Dashboard run directory", value=default_run)
+    run_options = _preferred_run_options(_discover_run_options(str(default_root)))
+    if not run_options and default_run:
+        run_options = [DashboardRunOption(Path(default_run), "run", "", None, "", "manual", "run")]
+    option_map = _build_dataset_option_map(run_options)
+    if option_map:
+        selected_dataset_label = st.sidebar.selectbox("Dataset", options=list(option_map.keys()), index=0)
+    else:
+        selected_dataset_label = ""
+    selected_option = option_map.get(selected_dataset_label)
+    run_dir_default = str(selected_option.run_dir) if selected_option else default_run
+    run_dir = st.sidebar.text_input("Dashboard run directory", value=run_dir_default)
     if not run_dir:
         st.info("Provide a dashboard run directory containing dashboard_manifest__v1.json.")
         return
@@ -110,8 +259,9 @@ def main() -> None:
     if not aggrid_available():
         st.info("Feature tables are using fallback rendering. Install/sync `streamlit-aggrid` to enable colored sortable grids.")
 
-    default_k = min([k for k in available_k if 10 <= k <= 30], default=available_k[0])
+    default_k = min([k for k in available_k if 10 <= k <= 50], default=available_k[0])
     n_clusters = st.sidebar.selectbox("Number of clusters", options=available_k, index=available_k.index(default_k))
+    cluster_row_limit = st.sidebar.selectbox("Rows to show", options=[25, 50, 100, 250], index=0)
 
     assignments = get_assignments(bundle, n_clusters)
     summary = get_cluster_summary(bundle, n_clusters)
@@ -126,13 +276,14 @@ def main() -> None:
     highlighted_clusters = [cluster_options[label] for label in highlighted_labels]
     mute_non_selected = st.sidebar.checkbox("Mute non-selected clusters", value=True)
 
-    active_cluster = highlighted_clusters[0] if highlighted_clusters else cluster_ids[0]
+    active_cluster = highlighted_clusters[0] if highlighted_clusters else _default_active_cluster(summary, cluster_ids)
 
     artifact_label = humanize_label(bundle.manifest.get("artifact", "run"))
     aggregation_label = humanize_label(bundle.manifest.get("aggregation", ""))
     window_label = f"{bundle.manifest.get('window_s', '')}s"
     st.subheader(f"{artifact_label} | {aggregation_label} | {window_label} | k={n_clusters}")
     st.caption(f"Run directory: {bundle.run_dir}")
+    st.caption("Feature tables show raw interpretation (`cluster_value`, `global_value`, `delta_vs_global`) and standardized ranking (`score_std`).")
 
     metrics = build_summary_metrics(assignments, summary, active_cluster)
     clusters_tab, entropy_tab = st.tabs(["Clusters", "Shannon Entropy"])
@@ -144,18 +295,96 @@ def main() -> None:
         col3.metric("Clusters", metrics["cluster_count"])
         col4.metric("Active cluster size", metrics["active_cluster_size"])
 
-        timeline_df = build_timeline_df(assignments, time_col=str(bundle.manifest.get("time_col", "time_cluster")))
         time_col = str(bundle.manifest.get("time_col", "time_cluster"))
-        invariant_timeline_df = _get_cached_invariant_timeline(run_dir, time_col)
-        fig = build_timeline_plot(
+        window_s = int(bundle.manifest.get("window_s", 0) or 0)
+        timeline_df = _get_cached_present_timeline(run_dir, n_clusters, time_col)
+        invariant_timeline_df = _get_cached_invariant_timeline(run_dir, n_clusters, time_col)
+        timeline_defaults = _get_cached_timeline_defaults(run_dir, n_clusters, time_col, window_s)
+        timeline_state = _ensure_timeline_state(run_dir, n_clusters, defaults=timeline_defaults)
+        time_mode = timeline_defaults.get("time_mode")
+        current_x_min = _deserialize_axis_value(timeline_state.get("x_min"), time_mode=time_mode)
+        current_x_max = _deserialize_axis_value(timeline_state.get("x_max"), time_mode=time_mode)
+        overview_fig = build_timeline_plot(
             timeline_df,
             highlighted_clusters=highlighted_clusters,
             mute_non_selected=mute_non_selected,
-            title=f"Timeline assignments for k={n_clusters}",
-            window_s=int(bundle.manifest.get("window_s", 0) or 0),
+            title=f"Timeline overview for k={n_clusters}",
+            window_s=window_s,
             missing_source_df=invariant_timeline_df,
+            max_present_bars=900,
+            max_missing_bars=90,
         )
-        st.plotly_chart(fig, width="stretch")
+        st.subheader("Timeline overview")
+        st.plotly_chart(overview_fig, width="stretch")
+
+        control_col1, control_col2, control_col3 = st.columns([1, 1, 3])
+        if control_col1.button("Reset viewport", key=f"reset_viewport_{n_clusters}"):
+            timeline_state["x_min"] = _serialize_axis_value(timeline_defaults.get("x_min"), time_mode=time_mode)
+            timeline_state["x_max"] = _serialize_axis_value(timeline_defaults.get("x_max"), time_mode=time_mode)
+            st.rerun()
+        if control_col2.button(
+            "Jump to incident anchor",
+            key=f"jump_anchor_{n_clusters}",
+            disabled=timeline_defaults.get("anchor_time") is None,
+        ):
+            timeline_state["x_min"] = _serialize_axis_value(timeline_defaults.get("x_min"), time_mode=time_mode)
+            timeline_state["x_max"] = _serialize_axis_value(timeline_defaults.get("x_max"), time_mode=time_mode)
+            st.rerun()
+        control_col3.caption(
+            f"Visible span: {_format_visible_span(current_x_min, current_x_max, time_mode=time_mode)}"
+        )
+
+        detail_present_df = filter_timeline_to_viewport(
+            timeline_df,
+            x_min=current_x_min,
+            x_max=current_x_max,
+            window_s=window_s,
+            padding_windows=1,
+        )
+        detail_missing_df = filter_timeline_to_viewport(
+            invariant_timeline_df,
+            x_min=current_x_min,
+            x_max=current_x_max,
+            window_s=window_s,
+            padding_windows=1,
+        )
+        target_bars = _compute_target_bars(timeline_state.get("container_width_px"))
+        detail_fig = build_timeline_plot(
+            detail_present_df,
+            highlighted_clusters=highlighted_clusters,
+            mute_non_selected=mute_non_selected,
+            title=f"Timeline detail for k={n_clusters}",
+            window_s=window_s,
+            missing_source_df=detail_missing_df,
+            max_present_bars=target_bars,
+            max_missing_bars=max(40, target_bars // 10),
+            xaxis_range=[current_x_min, current_x_max] if current_x_min is not None and current_x_max is not None else None,
+            height=340,
+        )
+        st.subheader("Timeline detail")
+        live_event = render_live_plotly(
+            detail_fig,
+            key=f"timeline_detail::{run_dir}::{n_clusters}",
+            height=360,
+        )
+        if live_event.get("reset_requested"):
+            timeline_state["x_min"] = _serialize_axis_value(timeline_defaults.get("x_min"), time_mode=time_mode)
+            timeline_state["x_max"] = _serialize_axis_value(timeline_defaults.get("x_max"), time_mode=time_mode)
+            st.rerun()
+        next_width = pd.to_numeric(pd.Series([live_event.get("container_width_px")]), errors="coerce").iloc[0]
+        if pd.notna(next_width):
+            current_width = pd.to_numeric(pd.Series([timeline_state.get("container_width_px")]), errors="coerce").iloc[0]
+            if pd.isna(current_width) or abs(float(next_width) - float(current_width)) >= 8.0:
+                timeline_state["container_width_px"] = int(next_width)
+                st.rerun()
+        if _viewport_changed(timeline_state.get("x_min"), live_event.get("x_min"), time_mode=time_mode) or _viewport_changed(
+            timeline_state.get("x_max"),
+            live_event.get("x_max"),
+            time_mode=time_mode,
+        ):
+            timeline_state["x_min"] = _serialize_axis_value(live_event.get("x_min"), time_mode=time_mode)
+            timeline_state["x_max"] = _serialize_axis_value(live_event.get("x_max"), time_mode=time_mode)
+            st.rerun()
 
         with st.expander("Run context", expanded=False):
             context_view = sanitize_for_streamlit(render_cluster_summary_context(summary))
@@ -170,8 +399,53 @@ def main() -> None:
             hide_index=True,
             column_config={
                 "cluster_col": st.column_config.ImageColumn("cluster_col", help="Cluster color", width="small"),
+                "closest_abs_distance_to_anchor": st.column_config.NumberColumn("closest_abs_distance_to_anchor", width="large"),
+                "frames_within_anchor_pm2": st.column_config.NumberColumn("frames_within_anchor_pm2", width="medium"),
+                "frames_within_anchor_pm2_frac": st.column_config.NumberColumn("frames_within_anchor_pm2_frac", width="large"),
+                "pre_anchor_within_pm2_count": st.column_config.NumberColumn("pre_anchor_within_pm2_count", width="large"),
+                "post_anchor_within_pm2_count": st.column_config.NumberColumn("post_anchor_within_pm2_count", width="large"),
+                "attack_within_anchor_pm2_count": st.column_config.NumberColumn("attack_within_anchor_pm2_count", width="large"),
             },
         )
+
+        st.subheader("Cluster windows")
+        window_tab_labels = [f"Cluster {cluster_id}" for cluster_id in cluster_ids]
+        window_tabs = st.tabs(window_tab_labels)
+        for cluster_id, tab in zip(cluster_ids, window_tabs, strict=False):
+            with tab:
+                detail_rows, total_detail_rows = get_cluster_detail_rows(bundle, n_clusters, cluster_id, limit=int(cluster_row_limit))
+                if detail_rows.empty:
+                    st.info(f"No row details available for cluster {cluster_id}.")
+                    continue
+                cluster_summary = summary[pd.to_numeric(summary["cluster_id"], errors="coerce").fillna(-1).astype(int) == int(cluster_id)]
+                if not cluster_summary.empty:
+                    summary_row = cluster_summary.iloc[0]
+                    anchor_time = summary_row.get("incident_anchor_time", pd.NA)
+                    closest_distance = summary_row.get("closest_abs_distance_to_anchor", pd.NA)
+                    boundary_count = summary_row.get("frames_within_anchor_pm2", pd.NA)
+                    pre_count = summary_row.get("pre_anchor_within_pm2_count", pd.NA)
+                    post_count = summary_row.get("post_anchor_within_pm2_count", pd.NA)
+                    attack_count = summary_row.get("attack_within_anchor_pm2_count", pd.NA)
+                    if pd.isna(anchor_time):
+                        st.caption("Boundary diagnostics: unavailable for this dataset because no incident anchor is present in the bundled labels.")
+                    else:
+                        caption = (
+                            f"Boundary diagnostics (+/-2 windows): within={boundary_count}, pre={pre_count}, "
+                            f"post={post_count}, attack={attack_count}, closest={closest_distance}, anchor={anchor_time}"
+                        )
+                        if pd.notna(boundary_count) and float(boundary_count) == 0.0 and pd.notna(closest_distance):
+                            caption += " | No rows from this cluster fall within +/-2 windows of the incident anchor."
+                        st.caption(caption)
+                st.caption(f"Showing {len(detail_rows)} of {total_detail_rows} rows for cluster {cluster_id}.")
+                detail_view = sanitize_for_streamlit(render_cluster_detail_table(detail_rows))
+                st.markdown(
+                    render_cluster_detail_table_html(
+                        detail_view,
+                        color=cluster_colors.get(cluster_id, "rgb(220,220,220)"),
+                        title=f"Cluster windows | cluster {cluster_id}",
+                    ),
+                    unsafe_allow_html=True,
+                )
 
         selected_feature_clusters = highlighted_clusters if highlighted_clusters else cluster_ids
         selected_feature_clusters = list(dict.fromkeys(int(cluster_id) for cluster_id in selected_feature_clusters))
@@ -206,9 +480,12 @@ def main() -> None:
                         width="stretch",
                         hide_index=True,
                         column_config={
+                            "direction": st.column_config.TextColumn("direction", width="medium"),
+                            "score_std": st.column_config.NumberColumn("score_std", width="large"),
                             "delta_vs_global": st.column_config.NumberColumn("delta_vs_global", width="large"),
                             "cluster_value": st.column_config.NumberColumn("cluster_value", width="large"),
                             "global_value": st.column_config.NumberColumn("global_value", width="large"),
+                            "global_std": st.column_config.NumberColumn("global_std", width="large"),
                         },
                     )
             for cluster_id, tab in zip(selected_feature_clusters, cluster_tabs, strict=False):
@@ -245,7 +522,7 @@ def main() -> None:
     with entropy_tab:
         st.subheader("Shannon Entropy Over Time")
         entropy_col = str(bundle.manifest.get("entropy_default_col") or "global_shannon_entropy")
-        entropy_df = build_entropy_timeline_df(bundle)
+        entropy_df = build_entropy_timeline_df(bundle, n_clusters)
         if entropy_df.empty or entropy_col not in entropy_df.columns:
             st.info("Entropy data is not available in this dashboard export.")
         else:

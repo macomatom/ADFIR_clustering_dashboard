@@ -124,7 +124,7 @@ Použije sa:
 
 Toto je režim používaný aj v dashboard exporte, kde sa generujú všetky `k` v intervale, typicky:
 
-- `10..30`
+- `10..50`
 
 ## 6. Validácie a skip/failure režimy
 

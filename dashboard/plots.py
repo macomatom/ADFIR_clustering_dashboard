@@ -10,6 +10,10 @@ TIMELINE_BAR_Y1 = 0.62
 TIMELINE_BAR_HEIGHT = TIMELINE_BAR_Y1 - TIMELINE_BAR_Y0
 TIMELINE_BAR_WIDTH_DEFAULT = 1.02
 ENTROPY_BAR_WIDTH_DEFAULT = 1.0
+TIMELINE_DENSE_MAX_PRESENT_ROWS = 5000
+TIMELINE_DENSE_MAX_SLOTS = 10000
+TIMELINE_MAX_RENDER_BARS = 2200
+TIMELINE_MAX_RENDER_MISSING_BARS = 120
 
 
 def _build_attack_window_trace(timeline_df: pd.DataFrame) -> go.Scatter | None:
@@ -92,14 +96,240 @@ def _compute_bar_width_values(x_values: pd.Series, *, window_s: int | None, bar_
     return None
 
 
+def _compress_timeline_rows(df: pd.DataFrame, *, window_s: int | None, max_bars: int) -> pd.DataFrame:
+    if df.empty or len(df) <= max_bars:
+        return df
+    work = df.copy()
+    timeline_x = work["timeline_x"]
+    is_datetime = pd.api.types.is_datetime64_any_dtype(timeline_x) or pd.to_datetime(timeline_x, errors="coerce").notna().all()
+    if is_datetime:
+        x_num = pd.to_datetime(timeline_x, errors="coerce").astype("int64")
+        width_scale = 1_000_000.0
+    else:
+        x_num = pd.to_numeric(timeline_x, errors="coerce")
+        width_scale = 1.0
+    valid_mask = pd.Series(x_num, index=work.index).notna()
+    if valid_mask.sum() <= max_bars:
+        return work
+    work = work.loc[valid_mask].copy()
+    work["_x_num"] = pd.Series(x_num, index=df.index).loc[valid_mask].astype("float64")
+    x_min = float(work["_x_num"].min())
+    x_max = float(work["_x_num"].max())
+    if not pd.notna(x_min) or not pd.notna(x_max) or x_max <= x_min:
+        return work.drop(columns="_x_num")
+    bucket_width = max((x_max - x_min) / float(max_bars), 1.0)
+    work["_bucket"] = ((work["_x_num"] - x_min) / bucket_width).astype(int)
+
+    compressed_rows: list[dict[str, object]] = []
+    for bucket_id, bucket_df in work.groupby("_bucket", sort=True):
+        row = bucket_df.iloc[0].copy()
+        row_idx_values = (
+            pd.to_numeric(bucket_df["row_idx"], errors="coerce")
+            if "row_idx" in bucket_df.columns
+            else pd.Series([len(bucket_df)], index=bucket_df.index, dtype="float64")
+        )
+        row["row_idx"] = int(row_idx_values.fillna(0).sum()) or int(len(bucket_df))
+        phase_mode = bucket_df["incident_phase_3class"].astype(str).mode(dropna=False)
+        row["incident_phase_3class"] = phase_mode.iloc[0] if not phase_mode.empty else row.get("incident_phase_3class", "")
+        if "_is_missing" in bucket_df.columns and bool(bucket_df["_is_missing"].all()):
+            row["cluster_id"] = pd.NA
+            row["_is_missing"] = True
+            row["_color"] = "rgb(220,220,220)"
+            if is_datetime:
+                center_values_num = pd.to_datetime(bucket_df["timeline_x"], errors="coerce").astype("int64").astype("float64")
+            else:
+                center_values_num = pd.to_numeric(bucket_df["timeline_x"], errors="coerce").astype("float64")
+            bar_width_values = (
+                pd.to_numeric(bucket_df["_bar_width"], errors="coerce")
+                if "_bar_width" in bucket_df.columns
+                else pd.Series([bucket_width / width_scale] * len(bucket_df.index), index=bucket_df.index, dtype="float64")
+            )
+            widths_num = bar_width_values.fillna(0).astype("float64") * width_scale
+            left_edges = center_values_num - (widths_num / 2.0)
+            right_edges = center_values_num + (widths_num / 2.0)
+            cover_left = float(left_edges.min())
+            cover_right = float(right_edges.max())
+            center_num = (cover_left + cover_right) / 2.0
+            if is_datetime:
+                row["timeline_x"] = pd.to_datetime(center_num, unit="ns", errors="coerce")
+            else:
+                row["timeline_x"] = float(center_num)
+            row["_bar_width"] = float((cover_right - cover_left) / width_scale) or float(bucket_width / width_scale)
+        else:
+            bucket_center_num = x_min + (float(bucket_id) + 0.5) * bucket_width
+            if is_datetime:
+                row["timeline_x"] = pd.to_datetime(bucket_center_num, unit="ns", errors="coerce")
+            else:
+                row["timeline_x"] = float(bucket_center_num)
+            present = bucket_df[~bucket_df["_is_missing"]].copy() if "_is_missing" in bucket_df.columns else bucket_df.copy()
+            cluster_mode = pd.to_numeric(present["cluster_id"], errors="coerce").dropna().astype(int).mode()
+            if not cluster_mode.empty:
+                chosen_cluster = int(cluster_mode.iloc[0])
+                row["cluster_id"] = chosen_cluster
+                if "_color" in present.columns:
+                    match = present[pd.to_numeric(present["cluster_id"], errors="coerce").fillna(-1).astype(int) == chosen_cluster]
+                    if not match.empty:
+                        row["_color"] = match.iloc[0]["_color"]
+            row["_is_missing"] = False
+            row["_bar_width"] = float(bucket_width / width_scale)
+        row["_hover"] = [
+            f"{bucket_df['timeline_x'].iloc[0]} -> {bucket_df['timeline_x'].iloc[-1]}",
+            str(row.get("cluster_id", "missing")) if pd.notna(row.get("cluster_id", pd.NA)) else "missing",
+            str(row.get("incident_phase_3class", "")),
+            int(row["row_idx"]),
+        ]
+        compressed_rows.append(row.to_dict())
+    compressed = pd.DataFrame(compressed_rows)
+    drop_cols = [col for col in ["_bucket", "_x_num"] if col in compressed.columns]
+    if drop_cols:
+        compressed = compressed.drop(columns=drop_cols)
+    return compressed.reset_index(drop=True)
+
+
+def _coarsen_missing_gaps(df: pd.DataFrame, *, window_s: int | None) -> pd.DataFrame:
+    if df.empty or "_bar_width" not in df.columns or not window_s or int(window_s) <= 0:
+        return df
+    work = df.copy()
+    is_datetime = pd.api.types.is_datetime64_any_dtype(work["timeline_x"]) or pd.to_datetime(work["timeline_x"], errors="coerce").notna().all()
+    unit_width = float(int(window_s) * 1000) if is_datetime else float(int(window_s))
+    min_group_width = unit_width
+    group_key = None
+    if "_x_num" in work.columns:
+        group_key = "_x_num"
+    else:
+        if is_datetime:
+            numeric_x = pd.to_datetime(work["timeline_x"], errors="coerce").astype("int64").astype("float64")
+        else:
+            numeric_x = pd.to_numeric(work["timeline_x"], errors="coerce").astype("float64")
+        work["_x_num"] = numeric_x
+        group_key = "_x_num"
+    work = work.sort_values(group_key).reset_index(drop=True)
+    bucket_ids: list[int] = []
+    current_bucket = 0
+    bucket_end = None
+    for x_num, bar_width in zip(work[group_key].tolist(), pd.to_numeric(work["_bar_width"], errors="coerce").fillna(unit_width).tolist(), strict=False):
+        if bucket_end is None or x_num > bucket_end + min_group_width:
+            current_bucket += 1
+            bucket_end = x_num + max(float(bar_width), min_group_width)
+        else:
+            bucket_end = max(bucket_end, x_num + max(float(bar_width), min_group_width))
+        bucket_ids.append(current_bucket)
+    work["_missing_bucket"] = bucket_ids
+    rows: list[dict[str, object]] = []
+    for _, bucket_df in work.groupby("_missing_bucket", sort=True):
+        row = bucket_df.iloc[len(bucket_df) // 2].copy()
+        row["_bar_width"] = float(pd.to_numeric(bucket_df["_bar_width"], errors="coerce").fillna(unit_width).sum())
+        if len(bucket_df) > 1:
+            row_count = int(pd.to_numeric(bucket_df.get("row_idx"), errors="coerce").fillna(0).sum())
+            row["row_idx"] = row_count if row_count > 0 else int(len(bucket_df))
+            row["incident_phase_3class"] = f"missing ({row['row_idx']} windows)"
+            row["_hover"] = [
+                f"{bucket_df['timeline_x'].iloc[0]} -> {bucket_df['timeline_x'].iloc[-1]}",
+                "missing",
+                str(row["incident_phase_3class"]),
+                int(row["row_idx"]),
+            ]
+        rows.append(row.to_dict())
+    return pd.DataFrame(rows).drop(columns=[col for col in ["_missing_bucket", "_x_num"] if col in rows[0]], errors="ignore").reset_index(drop=True)
+
+
+def _estimate_visible_window_count(source_df: pd.DataFrame, *, window_s: int | None) -> int | None:
+    if source_df.empty or "timeline_x" not in source_df.columns or not window_s or int(window_s) <= 0:
+        return None
+    series = pd.Series(source_df["timeline_x"])
+    if pd.api.types.is_datetime64_any_dtype(series) or pd.to_datetime(series, errors="coerce").notna().all():
+        values = pd.to_datetime(series, errors="coerce").dropna()
+        if values.empty:
+            return None
+        return int(round((values.max() - values.min()).total_seconds() / int(window_s))) + 1
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    return int(round((float(numeric.max()) - float(numeric.min())) / int(window_s))) + 1
+
+
 def _build_dense_timeline_slots(
     timeline_df: pd.DataFrame,
     *,
     missing_source_df: pd.DataFrame,
     window_s: int | None,
 ) -> pd.DataFrame:
+    def _fallback_without_dense() -> pd.DataFrame:
+        out = timeline_df.copy()
+        out["is_missing_window"] = False
+        if "time_cluster" not in out.columns and "timeline_x" in out.columns:
+            out["time_cluster"] = out["timeline_x"]
+        return out
+
+    def _build_sparse_missing_gap_slots(source_df: pd.DataFrame) -> pd.DataFrame:
+        out = _fallback_without_dense()
+        if source_df.empty or not window_s or int(window_s) <= 0 or "timeline_x" not in source_df.columns:
+            return out
+        source_x = pd.Series(source_df["timeline_x"])
+        step_seconds = float(int(window_s))
+
+        if pd.api.types.is_datetime64_any_dtype(source_x) or pd.to_datetime(source_x, errors="coerce").notna().any():
+            centers = pd.to_datetime(source_x, errors="coerce").dropna().drop_duplicates().sort_values().reset_index(drop=True)
+            if len(centers) < 2:
+                return out
+            gaps = centers.diff().iloc[1:]
+            gap_rows: list[dict[str, object]] = []
+            prev_values = centers.iloc[:-1].reset_index(drop=True)
+            next_values = centers.iloc[1:].reset_index(drop=True)
+            for prev_time, next_time, gap in zip(prev_values, next_values, gaps, strict=False):
+                total_seconds = gap.total_seconds()
+                missing_count = int(round(total_seconds / step_seconds)) - 1
+                if missing_count <= 0:
+                    continue
+                midpoint = prev_time + (gap / 2)
+                gap_rows.append(
+                    {
+                        "timeline_x": midpoint,
+                        "time_cluster": f"{prev_time} -> {next_time}",
+                        "cluster_id": pd.NA,
+                        "incident_phase_3class": f"missing ({missing_count} windows)",
+                        "row_idx": missing_count,
+                        "is_missing_window": True,
+                        "_bar_width": float(missing_count * step_seconds * 1000),
+                    }
+                )
+        else:
+            numeric_x = pd.to_numeric(source_x, errors="coerce").dropna().drop_duplicates().sort_values().reset_index(drop=True)
+            if len(numeric_x) < 2:
+                return out
+            diffs = numeric_x.diff().iloc[1:]
+            prev_values = numeric_x.iloc[:-1].reset_index(drop=True)
+            next_values = numeric_x.iloc[1:].reset_index(drop=True)
+            gap_rows = []
+            for prev_value, next_value, gap in zip(prev_values, next_values, diffs, strict=False):
+                total_seconds = float(gap)
+                missing_count = int(round(total_seconds / step_seconds)) - 1
+                if missing_count <= 0:
+                    continue
+                midpoint = float(prev_value + gap / 2.0)
+                gap_rows.append(
+                    {
+                        "timeline_x": midpoint,
+                        "time_cluster": f"{prev_value} -> {next_value}",
+                        "cluster_id": pd.NA,
+                        "incident_phase_3class": f"missing ({missing_count} windows)",
+                        "row_idx": missing_count,
+                        "is_missing_window": True,
+                        "_bar_width": float(missing_count * step_seconds),
+                    }
+                )
+        if not gap_rows:
+            return out
+        gaps_df = pd.DataFrame(gap_rows)
+        return pd.concat([out, gaps_df], ignore_index=True, sort=False)
+
+    if len(timeline_df) > TIMELINE_DENSE_MAX_PRESENT_ROWS:
+        return _build_sparse_missing_gap_slots(missing_source_df)
     source_x = pd.to_datetime(missing_source_df.get("timeline_x"), errors="coerce")
     if source_x.notna().any() and window_s and int(window_s) > 0:
+        slot_count = int(((source_x.dropna().max() - source_x.dropna().min()).total_seconds() / int(window_s))) + 1
+        if slot_count > TIMELINE_DENSE_MAX_SLOTS:
+            return _build_sparse_missing_gap_slots(missing_source_df)
         base = pd.DataFrame(
             {
                 "timeline_x": pd.date_range(
@@ -117,11 +347,7 @@ def _build_dense_timeline_slots(
             merged["time_cluster"] = merged["timeline_x"]
         return merged
 
-    out = timeline_df.copy()
-    out["is_missing_window"] = False
-    if "time_cluster" not in out.columns and "timeline_x" in out.columns:
-        out["time_cluster"] = out["timeline_x"]
-    return out
+    return _fallback_without_dense()
 
 
 def build_timeline_plot(
@@ -132,6 +358,10 @@ def build_timeline_plot(
     title: str,
     window_s: int | None = None,
     missing_source_df: pd.DataFrame | None = None,
+    max_present_bars: int | None = None,
+    max_missing_bars: int | None = None,
+    xaxis_range: list[object] | tuple[object, object] | None = None,
+    height: int = 300,
 ) -> go.Figure:
     fig = go.Figure()
     if timeline_df.empty:
@@ -141,58 +371,67 @@ def build_timeline_plot(
     cluster_ids = sorted(pd.to_numeric(timeline_df["cluster_id"], errors="coerce").dropna().astype(int).unique().tolist())
     colors = cluster_color_map(cluster_ids)
     highlighted = set(int(x) for x in highlighted_clusters)
-    hover_cols = ["time_cluster", "cluster_id", "n_clusters", "incident_phase_3class", "is_attack_related", "row_idx"]
+    hover_cols = ["time_cluster", "cluster_id", "incident_phase_3class", "row_idx"]
     missing_source = missing_source_df if missing_source_df is not None else timeline_df
     dense_timeline = _build_dense_timeline_slots(timeline_df, missing_source_df=missing_source, window_s=window_s)
     for col in hover_cols:
         if col not in dense_timeline.columns:
             dense_timeline[col] = ""
+    dense_timeline = dense_timeline.copy()
+    cluster_numeric = pd.to_numeric(dense_timeline.get("cluster_id"), errors="coerce")
+    is_missing_series = (
+        dense_timeline["is_missing_window"].astype(bool)
+        if "is_missing_window" in dense_timeline.columns
+        else pd.Series(False, index=dense_timeline.index)
+    )
+    dense_timeline["_is_missing"] = is_missing_series | cluster_numeric.isna()
 
-    missing_mask: list[bool] = []
-    color_values: list[str] = []
-    hover_rows: list[list[object]] = []
-    for row in dense_timeline.itertuples(index=False):
-        row_dict = row._asdict()
-        cluster_value = pd.to_numeric(pd.Series([row_dict.get("cluster_id")]), errors="coerce").iloc[0]
-        is_missing_window = bool(row_dict.get("is_missing_window", False))
-        if is_missing_window or pd.isna(cluster_value):
-            missing_mask.append(True)
-            color_values.append("rgb(220,220,220)")
-            hover_rows.append(
-                [
-                    row_dict.get("time_cluster", row_dict.get("timeline_x", "")),
-                    "missing",
-                    row_dict.get("n_clusters", ""),
-                    "",
-                    "",
-                    "",
-                ]
-            )
-            continue
-
-        missing_mask.append(False)
+    def _row_color(cluster_value: object, is_missing_window: object) -> str:
+        if bool(is_missing_window) or pd.isna(cluster_value):
+            return "rgb(220,220,220)"
         cluster_id = int(cluster_value)
         is_selected = not highlighted or cluster_id in highlighted
         if is_selected:
-            color_values.append(colors[cluster_id])
-        else:
-            color_values.append(to_rgba(colors[cluster_id], 0.08) if mute_non_selected else to_rgba(colors[cluster_id], 0.35))
-        hover_rows.append([row_dict.get(col, "") for col in hover_cols])
+            return colors[cluster_id]
+        return to_rgba(colors[cluster_id], 0.08) if mute_non_selected else to_rgba(colors[cluster_id], 0.35)
 
-    dense_timeline = dense_timeline.copy()
-    dense_timeline["_is_missing"] = missing_mask
-    dense_timeline["_color"] = color_values
-    dense_timeline["_hover"] = hover_rows
+    dense_timeline["_color"] = [
+        _row_color(cluster_value, is_missing)
+        for cluster_value, is_missing in zip(cluster_numeric.tolist(), dense_timeline["_is_missing"].tolist(), strict=False)
+    ]
+
+    hover_frame = dense_timeline[[col for col in hover_cols if col in dense_timeline.columns]].copy()
+    if "time_cluster" in hover_frame.columns:
+        hover_frame["time_cluster"] = hover_frame["time_cluster"].astype(str)
+    if "cluster_id" in hover_frame.columns:
+        hover_frame["cluster_id"] = hover_frame["cluster_id"].astype(str)
+    dense_timeline["_hover"] = hover_frame.to_numpy().tolist()
 
     missing_df = dense_timeline[dense_timeline["_is_missing"]].copy()
     present_df = dense_timeline[~dense_timeline["_is_missing"]].copy()
+    present_bar_budget = int(max_present_bars or TIMELINE_MAX_RENDER_BARS)
+    missing_bar_budget = int(max_missing_bars or TIMELINE_MAX_RENDER_MISSING_BARS)
+    visible_window_count = _estimate_visible_window_count(missing_source, window_s=window_s)
+    should_render_full_detail = visible_window_count is not None and visible_window_count <= present_bar_budget
+    if not should_render_full_detail:
+        missing_df = _compress_timeline_rows(missing_df, window_s=window_s, max_bars=missing_bar_budget)
+        missing_df = _coarsen_missing_gaps(missing_df, window_s=window_s)
+        present_df = _compress_timeline_rows(present_df, window_s=window_s, max_bars=present_bar_budget)
 
-    missing_width_default = _compute_bar_width_values(
-        pd.Series(missing_df["timeline_x"]), window_s=window_s, bar_width_fraction=TIMELINE_BAR_WIDTH_DEFAULT
-    ) if not missing_df.empty else None
-    present_width_default = _compute_bar_width_values(
-        pd.Series(present_df["timeline_x"]), window_s=window_s, bar_width_fraction=TIMELINE_BAR_WIDTH_DEFAULT
-    ) if not present_df.empty else None
+    missing_width_default = (
+        missing_df["_bar_width"].tolist()
+        if not missing_df.empty and "_bar_width" in missing_df.columns and missing_df["_bar_width"].notna().any()
+        else _compute_bar_width_values(pd.Series(missing_df["timeline_x"]), window_s=window_s, bar_width_fraction=TIMELINE_BAR_WIDTH_DEFAULT)
+        if not missing_df.empty
+        else None
+    )
+    present_width_default = (
+        present_df["_bar_width"].tolist()
+        if not present_df.empty and "_bar_width" in present_df.columns and present_df["_bar_width"].notna().any()
+        else _compute_bar_width_values(pd.Series(present_df["timeline_x"]), window_s=window_s, bar_width_fraction=TIMELINE_BAR_WIDTH_DEFAULT)
+        if not present_df.empty
+        else None
+    )
 
     if not missing_df.empty:
         fig.add_trace(
@@ -202,15 +441,13 @@ def build_timeline_plot(
                 base=TIMELINE_BAR_Y0,
                 width=missing_width_default,
                 name="missing data",
-                marker={"color": missing_df["_color"].tolist(), "line": {"width": 0}},
+                marker={"color": ["rgb(220,220,220)"] * len(missing_df), "line": {"width": 0}},
                 customdata=missing_df["_hover"].tolist(),
                 hovertemplate=(
                     "time_cluster=%{customdata[0]}<br>"
                     "cluster_id=%{customdata[1]}<br>"
-                    "n_clusters=%{customdata[2]}<br>"
-                    "incident_phase_3class=%{customdata[3]}<br>"
-                    "is_attack_related=%{customdata[4]}<br>"
-                    "row_idx=%{customdata[5]}<extra></extra>"
+                    "incident_phase_3class=%{customdata[2]}<br>"
+                    "row_idx=%{customdata[3]}<extra></extra>"
                 ),
                 showlegend=False,
             )
@@ -229,16 +466,14 @@ def build_timeline_plot(
                 hovertemplate=(
                     "time_cluster=%{customdata[0]}<br>"
                     "cluster_id=%{customdata[1]}<br>"
-                    "n_clusters=%{customdata[2]}<br>"
-                    "incident_phase_3class=%{customdata[3]}<br>"
-                    "is_attack_related=%{customdata[4]}<br>"
-                    "row_idx=%{customdata[5]}<extra></extra>"
+                    "incident_phase_3class=%{customdata[2]}<br>"
+                    "row_idx=%{customdata[3]}<extra></extra>"
                 ),
                 showlegend=False,
             )
         )
 
-    attack_window_trace = _build_attack_window_trace(present_df)
+    attack_window_trace = _build_attack_window_trace(timeline_df)
     if attack_window_trace is not None:
         fig.add_trace(attack_window_trace)
 
@@ -307,7 +542,7 @@ def build_timeline_plot(
             "zeroline": False,
         },
         yaxis_title="",
-        height=300,
+        height=height,
         legend_title_text="clusters",
         yaxis={
             "visible": False,
@@ -317,6 +552,8 @@ def build_timeline_plot(
             "range": [0.25, 0.75],
         },
     )
+    if xaxis_range is not None and len(xaxis_range) == 2:
+        fig.update_xaxes(range=list(xaxis_range))
     return fig
 
 

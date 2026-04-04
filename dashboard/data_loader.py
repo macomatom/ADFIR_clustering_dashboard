@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +37,29 @@ class DashboardRunBundle:
     summaries: pd.DataFrame
     features: pd.DataFrame
     window_metrics: pd.DataFrame
+    cluster_run_dirs_by_k: dict[int, Path] | None = None
+
+
+@dataclass(slots=True)
+class DashboardRunOption:
+    run_dir: Path
+    artifact: str
+    aggregation: str
+    window_s: int | None
+    method: str
+    source_mode: str
+    label: str
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _coerce_int(value: Any) -> int | None:
+    series = pd.to_numeric(pd.Series([value]), errors="coerce")
+    if series.isna().iloc[0]:
+        return None
+    return int(series.iloc[0])
 
 
 def _validate_required_columns(df: pd.DataFrame, required: set[str], label: str) -> None:
@@ -55,6 +75,11 @@ def _read_table(path: Path) -> pd.DataFrame:
     if suffix == ".parquet":
         return pd.read_parquet(path)
     raise ValueError(f"Unsupported dashboard table format: {path}")
+
+
+@lru_cache(maxsize=256)
+def _read_table_cached(path_str: str) -> pd.DataFrame:
+    return _read_table(Path(path_str))
 
 
 def _normalize_assignments(assignments: pd.DataFrame, manifest: dict[str, Any]) -> pd.DataFrame:
@@ -99,21 +124,19 @@ def _cluster_child_run_dirs(run_dir: Path) -> list[Path]:
 
 
 def _selected_k_from_manifest(manifest: dict[str, Any]) -> int | None:
-    value = pd.to_numeric(pd.Series([manifest.get("selected_k")]), errors="coerce").iloc[0]
-    return None if pd.isna(value) else int(value)
+    return _coerce_int(manifest.get("selected_k"))
 
 
-def _include_cluster_k(selected_k: int | None) -> bool:
-    return selected_k is None or not (2 <= int(selected_k) <= 6)
-
-
-def _load_cluster_run(run_dir: Path, manifest: dict[str, Any]) -> DashboardRunBundle:
-    assignments = _normalize_assignments(_read_table(run_dir / "cluster_assignments__v1.parquet"), manifest)
-    summaries = _normalize_summaries(_read_table(run_dir / "cluster_summary__v1.csv"), manifest)
-    features = _normalize_features(_read_table(run_dir / "cluster_features__v1.csv"), manifest)
+@lru_cache(maxsize=256)
+def _cached_cluster_run_tables(run_dir_str: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    run_dir = Path(run_dir_str)
+    manifest = _load_manifest(run_dir / "cluster_manifest__v1.json")
+    assignments = _normalize_assignments(_read_table_cached(str(run_dir / "cluster_assignments__v1.parquet")), manifest)
+    summaries = _normalize_summaries(_read_table_cached(str(run_dir / "cluster_summary__v1.csv")), manifest)
+    features = _normalize_features(_read_table_cached(str(run_dir / "cluster_features__v1.csv")), manifest)
     window_metrics_cols = [col for col in ["window_id", "row_idx", "time_cluster"] if col in assignments.columns]
     window_metrics = assignments[window_metrics_cols].copy() if window_metrics_cols else pd.DataFrame()
-    manifest = {
+    normalized_manifest = {
         **manifest,
         "available_k": [int(manifest["selected_k"])] if manifest.get("selected_k") is not None else [],
         "assignments_file": "cluster_assignments__v1.parquet",
@@ -122,74 +145,139 @@ def _load_cluster_run(run_dir: Path, manifest: dict[str, Any]) -> DashboardRunBu
         "window_metrics_file": None,
         "time_col": "time_cluster" if "time_cluster" in assignments.columns else "row_idx",
     }
+    return assignments, summaries, features, window_metrics, normalized_manifest
 
+
+def _load_collection_child_bundle(run_dir: Path) -> DashboardRunBundle:
+    assignments, summaries, features, window_metrics, manifest = _cached_cluster_run_tables(str(run_dir))
     _validate_required_columns(assignments, REQUIRED_ASSIGNMENT_COLS, "assignments")
     _validate_required_columns(summaries, REQUIRED_SUMMARY_COLS, "summaries")
     _validate_required_columns(features, REQUIRED_FEATURE_COLS, "features")
     if not window_metrics.empty:
         _validate_required_columns(window_metrics, REQUIRED_WINDOW_METRIC_COLS, "window_metrics")
-
     return DashboardRunBundle(
         run_dir=run_dir,
         manifest=manifest,
-        assignments=assignments,
-        summaries=summaries,
-        features=features,
-        window_metrics=window_metrics,
+        assignments=assignments.copy(),
+        summaries=summaries.copy(),
+        features=features.copy(),
+        window_metrics=window_metrics.copy(),
     )
+
+
+def _include_cluster_k(selected_k: int | None) -> bool:
+    return selected_k is None or not (2 <= int(selected_k) <= 6)
+
+
+def _infer_run_context_from_path(run_dir: Path) -> tuple[str, str, int | None]:
+    parts = run_dir.parts
+    for marker in ("dashboard", "clustering"):
+        if marker in parts:
+            idx = parts.index(marker)
+            if idx >= 3:
+                artifact = str(parts[idx - 3])
+                aggregation = str(parts[idx - 2])
+                window_raw = str(parts[idx - 1]).rstrip("s")
+                window_s = _coerce_int(window_raw)
+                return artifact, aggregation, window_s
+    return str(run_dir.name), "", None
+
+
+def _build_run_label(*, artifact: str, aggregation: str, window_s: int | None, method: str) -> str:
+    parts = [artifact]
+    if aggregation:
+        parts.append(aggregation)
+    if window_s is not None:
+        parts.append(f"{window_s}s")
+    if method:
+        parts.append(method)
+    return " | ".join(parts)
+
+
+def _describe_run(run_dir: Path) -> DashboardRunOption:
+    child_cluster_runs = _cluster_child_run_dirs(run_dir) if run_dir.exists() and run_dir.is_dir() else []
+    inferred_artifact, inferred_aggregation, inferred_window_s = _infer_run_context_from_path(run_dir)
+
+    if child_cluster_runs:
+        child_manifests = [
+            _load_manifest(child_dir / "cluster_manifest__v1.json")
+            for child_dir in child_cluster_runs
+            if _include_cluster_k(_selected_k_from_manifest(_load_manifest(child_dir / "cluster_manifest__v1.json")))
+        ]
+        if not child_manifests:
+            raise FileNotFoundError(f"No supported cluster child runs found under: {run_dir}")
+        manifest = max(child_manifests, key=lambda item: _selected_k_from_manifest(item) or -1)
+        source_mode = "cluster_collection"
+    else:
+        dashboard_manifest_path = run_dir / "dashboard_manifest__v1.json"
+        cluster_manifest_path = run_dir / "cluster_manifest__v1.json"
+        if dashboard_manifest_path.exists():
+            manifest = _load_manifest(dashboard_manifest_path)
+            source_mode = "dashboard_export"
+        elif cluster_manifest_path.exists():
+            manifest = _load_manifest(cluster_manifest_path)
+            source_mode = "cluster_run"
+        else:
+            raise FileNotFoundError(f"Missing dashboard manifest under: {run_dir}")
+
+    artifact = str(manifest.get("artifact") or inferred_artifact)
+    aggregation = str(manifest.get("aggregation") or inferred_aggregation)
+    window_s = _coerce_int(manifest.get("window_s"))
+    if window_s is None:
+        window_s = inferred_window_s
+    method = str(manifest.get("method") or run_dir.name)
+
+    return DashboardRunOption(
+        run_dir=run_dir,
+        artifact=artifact,
+        aggregation=aggregation,
+        window_s=window_s,
+        method=method,
+        source_mode=source_mode,
+        label=_build_run_label(artifact=artifact, aggregation=aggregation, window_s=window_s, method=method),
+    )
+
+
+def _load_cluster_run(run_dir: Path, manifest: dict[str, Any]) -> DashboardRunBundle:
+    return _load_collection_child_bundle(run_dir)
 
 
 def _load_cluster_collection_run(run_dir: Path) -> DashboardRunBundle:
     child_dirs = _cluster_child_run_dirs(run_dir)
     if not child_dirs:
         raise FileNotFoundError(f"No cluster child runs found under: {run_dir}")
-    child_bundles = [
-        _load_cluster_run(child_dir, manifest)
+    child_entries = [
+        (child_dir, _load_manifest(child_dir / "cluster_manifest__v1.json"))
         for child_dir in child_dirs
-        for manifest in [_load_manifest(child_dir / "cluster_manifest__v1.json")]
-        if _include_cluster_k(_selected_k_from_manifest(manifest))
     ]
-    if not child_bundles:
+    child_entries = [(child_dir, manifest) for child_dir, manifest in child_entries if _include_cluster_k(_selected_k_from_manifest(manifest))]
+    if not child_entries:
         raise FileNotFoundError(f"No supported cluster child runs found under: {run_dir}")
-    assignments = pd.concat([bundle.assignments for bundle in child_bundles], ignore_index=True)
-    summaries = pd.concat([bundle.summaries for bundle in child_bundles], ignore_index=True)
-    feature_frames = [bundle.features for bundle in child_bundles if not bundle.features.empty]
-    features = pd.concat(feature_frames, ignore_index=True) if feature_frames else pd.DataFrame()
-    metric_cols = [col for col in ["window_id", "row_idx", "time_cluster"] if col in assignments.columns]
-    if metric_cols:
-        window_metrics = assignments[metric_cols].drop_duplicates(subset=metric_cols, keep="first").reset_index(drop=True)
-    else:
-        window_metrics = pd.DataFrame()
-    latest_bundle = max(child_bundles, key=lambda bundle: pd.to_numeric(pd.Series([bundle.manifest.get("selected_k")]), errors="coerce").fillna(-1).iloc[0])
+    latest_manifest = max(child_entries, key=lambda item: _selected_k_from_manifest(item[1]) or -1)[1]
     available_k = sorted(
         {
             int(k)
-            for bundle in child_bundles
-            for k in bundle.manifest.get("available_k", [])
+            for _, manifest in child_entries
+            for k in [manifest.get("selected_k")]
             if pd.notna(k)
         }
     )
     manifest = {
-        **latest_bundle.manifest,
+        **latest_manifest,
         "selected_k": None,
         "available_k": available_k,
         "source_mode": "cluster_collection",
-        "time_col": "time_cluster" if "time_cluster" in assignments.columns else "row_idx",
+        "time_col": "time_cluster",
     }
-
-    _validate_required_columns(assignments, REQUIRED_ASSIGNMENT_COLS, "assignments")
-    _validate_required_columns(summaries, REQUIRED_SUMMARY_COLS, "summaries")
-    _validate_required_columns(features, REQUIRED_FEATURE_COLS, "features")
-    if not window_metrics.empty:
-        _validate_required_columns(window_metrics, REQUIRED_WINDOW_METRIC_COLS, "window_metrics")
 
     return DashboardRunBundle(
         run_dir=run_dir,
         manifest=manifest,
-        assignments=assignments,
-        summaries=summaries,
-        features=features,
-        window_metrics=window_metrics,
+        assignments=pd.DataFrame(),
+        summaries=pd.DataFrame(),
+        features=pd.DataFrame(),
+        window_metrics=pd.DataFrame(),
+        cluster_run_dirs_by_k={int(_selected_k_from_manifest(manifest) or -1): child_dir for child_dir, manifest in child_entries},
     )
 
 
@@ -258,3 +346,13 @@ def discover_dashboard_runs(root: Path) -> list[Path]:
         seen.add(run)
         ordered.append(run)
     return ordered
+
+
+def discover_dashboard_run_options(root: Path) -> list[DashboardRunOption]:
+    options: list[DashboardRunOption] = []
+    for run_dir in discover_dashboard_runs(root):
+        try:
+            options.append(_describe_run(run_dir))
+        except FileNotFoundError:
+            continue
+    return options

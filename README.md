@@ -1,108 +1,108 @@
 # ADFIR Cluster Dashboard
 
-Standalone Streamlit dashboard for browsing precomputed ADFIR cluster outputs.
+Standalone Streamlit dashboard for exploring precomputed ADFIR clustering outputs.
 
-The repository already contains bundled data for:
+This repository is self-contained: it includes the Streamlit app, bundled clustering data under `data/dashboard_exports/`, and methodology notes in `metodika.md`.
 
-- `Magnet_CTF_2022_Windows_Laptop`
-- aggregation `sum`
-- window size `60s`
-- agglomerative clustering
-- `k = 10..30`
+## What's included
 
-The application can read both:
+- a standalone Streamlit dashboard application
+- bundled clustering exports for multiple datasets in `data/dashboard_exports/`
+- support for browsing datasets, cluster counts, cluster summaries, feature importance, and cluster window details
+- boundary diagnostics around the estimated attack start
+- methodology notes in `metodika.md`
 
-- standalone dashboard exports with `dashboard_manifest__v1.json`
-- direct clustering outputs with `cluster_manifest__v1.json`
+## Quick start
 
-## What Is Included
-
-- Streamlit dashboard UI
-- standalone `pyproject.toml`
-- standalone `uv.lock`
-- bundled data under `data/dashboard_exports/...`
-
-## Installation
-
-### 1. Prerequisites
-
-Required:
-
-- Python `3.11+`
-- `uv`
-
-Project metadata currently targets:
-
-- Python `>=3.11,<3.14`
-
-### 2. Clone the Repository
+### 1. Clone the repository
 
 ```powershell
 git clone https://github.com/macomatom/ADFIR_clustering_dashboard.git
 cd ADFIR_clustering_dashboard
 ```
 
-### 3. Install `uv`
+### 2. Install `uv`
 
-Official docs:
+Project requirements:
+
+- Python `>=3.11,<3.14`
+- `uv`
+
+Official installation guide:
 
 - https://docs.astral.sh/uv/getting-started/installation/
 
-Recommended install methods:
-
-Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Windows with WinGet:
+Examples:
 
 ```powershell
 winget install --id=astral-sh.uv -e
 ```
 
-macOS / Linux:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Verify installation:
-
 ```powershell
-uv --version
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-### 4. Install Project Dependencies
+### 3. Install dependencies
 
 ```powershell
 uv sync
 ```
 
-This creates the local virtual environment and installs all required packages.
-
-## Running the Dashboard
-
-### 5. Start Streamlit
+### 4. Run the Streamlit dashboard
 
 ```powershell
 uv run streamlit run app.py
 ```
 
-After startup, the dashboard will automatically select the newest bundled run from `data/dashboard_exports`.
+The app starts a standalone Streamlit dashboard and loads the newest compatible bundled run from `data/dashboard_exports/` by default.
 
-## Troubleshooting
+## Using the dashboard
 
-If dependencies are missing:
+The bundled data are available out of the box. After startup, the left sidebar lets you choose:
 
-```powershell
-uv sync
+- the dataset
+- the number of clusters
+- how many cluster detail rows to show
+
+The dashboard currently supports:
+
+- cluster summaries for the selected run
+- dual-view feature importance for each cluster
+- a `Cluster windows` table with time context and original parquet row references
+- boundary diagnostics showing which frames lie close to the estimated attack start
+- a Shannon entropy view when entropy data are present in the loaded export
+
+## Using your own data
+
+The app can load both:
+
+- dashboard bundles that contain `dashboard_manifest__v1.json`
+- direct clustering outputs that contain `cluster_manifest__v1.json`
+
+The simplest approach is to place your data under a structure similar to:
+
+```text
+data/dashboard_exports/<dataset>/sum/60s/clustering/agglomerative/k10
+data/dashboard_exports/<dataset>/sum/60s/clustering/agglomerative/k11
+...
 ```
 
-If you want to rebuild the environment:
+The dashboard can also work with a collection root such as:
 
-```powershell
-Remove-Item -Recurse -Force .venv
-uv sync
+```text
+data/dashboard_exports/<dataset>/sum/60s/clustering/agglomerative
 ```
+
+and discover the available `k` values from its subdirectories.
+
+## Methodology
+
+Methodology notes for the current clustering and interpretation setup are included in:
+
+- `metodika.md`
+
+## Not implemented yet
+
+- no in-app recomputation of clustering; the dashboard only explores precomputed outputs
+- no automatic fetch or sync of newly generated exports from the main research repository
+- no editing or relabeling workflow directly inside the dashboard

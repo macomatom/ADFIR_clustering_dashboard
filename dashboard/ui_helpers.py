@@ -53,10 +53,19 @@ def build_cluster_option_labels(cluster_ids: list[int]) -> dict[str, int]:
 def render_feature_overview_table(features_df: pd.DataFrame, *, include_cluster_id: bool = True) -> pd.DataFrame:
     if features_df.empty:
         return features_df
-    preferred_cols = ["rank", "feature_name", "delta_vs_global", "cluster_value", "global_value"]
+    preferred_cols = [
+        "rank",
+        "feature_name",
+        "direction",
+        "score_std",
+        "delta_vs_global",
+        "cluster_value",
+        "global_value",
+        "global_std",
+    ]
     keep = ([c for c in ["cluster_id"] if include_cluster_id and c in features_df.columns]) + [c for c in preferred_cols if c in features_df.columns]
     out = features_df[keep].copy()
-    for col in ["rank", "delta_vs_global", "cluster_value", "global_value"]:
+    for col in ["rank", "score_std", "delta_vs_global", "cluster_value", "global_value", "global_std"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     if "rank" in out.columns:
@@ -88,6 +97,7 @@ def render_cluster_summary_table(summary_df: pd.DataFrame) -> pd.DataFrame:
         "largest_cluster_frac",
         "attack_rate_global",
         "artifact_count",
+        "incident_anchor_time",
         "time_cluster_min",
         "time_cluster_max",
         "status",
@@ -105,6 +115,12 @@ def render_cluster_summary_table(summary_df: pd.DataFrame) -> pd.DataFrame:
         "attack_count",
         "attack_rate",
         "attack_lift_vs_global",
+        "closest_abs_distance_to_anchor",
+        "frames_within_anchor_pm2",
+        "frames_within_anchor_pm2_frac",
+        "pre_anchor_within_pm2_count",
+        "post_anchor_within_pm2_count",
+        "attack_within_anchor_pm2_count",
     ]
     leading = [col for col in priority if col in summary_df.columns]
     remaining = [col for col in summary_df.columns if col not in leading and col not in repeated_context_cols]
@@ -130,6 +146,7 @@ def render_cluster_summary_context(summary_df: pd.DataFrame) -> pd.DataFrame:
         "largest_cluster_frac",
         "attack_rate_global",
         "artifact_count",
+        "incident_anchor_time",
         "time_cluster_min",
         "time_cluster_max",
         "status",
@@ -157,6 +174,31 @@ def render_cluster_summary_context(summary_df: pd.DataFrame) -> pd.DataFrame:
 
 def render_cluster_summary_dataframe(summary_df: pd.DataFrame) -> pd.DataFrame:
     return render_cluster_summary_table(summary_df)
+
+
+def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
+    if detail_df.empty:
+        return detail_df
+    priority = [
+        "time_cluster",
+        "distance_from_incident_anchor_human",
+        "distance_from_incident_anchor",
+        "abs_distance_from_incident_anchor",
+        "incident_phase_3class",
+        "row_idx",
+        "source_path",
+        "window_id",
+        "is_attack_related",
+        "cluster_id",
+        "n_clusters",
+    ]
+    leading = [col for col in priority if col in detail_df.columns]
+    remaining = [col for col in detail_df.columns if col not in leading]
+    out = detail_df[leading + remaining].copy()
+    for col in ["distance_from_incident_anchor", "abs_distance_from_incident_anchor", "row_idx", "is_attack_related", "cluster_id", "n_clusters"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    return out
 
 
 def render_cluster_color_legend_html(cluster_ids: list[int], cluster_colors: dict[int, str]) -> str:
@@ -246,6 +288,32 @@ def render_feature_table_html(features_df: pd.DataFrame, *, color: str, title: s
             f'<td style="padding:7px 10px;border-bottom:1px solid #eef1f4;white-space:nowrap;">'
             f"{html.escape(_format_feature_cell(row[col]))}</td>"
             for col in features_df.columns
+        )
+        body_rows.append(f"<tr>{data_cells}</tr>")
+    return (
+        f'<div style="margin:8px 0 14px 0;border:2px solid {color};border-radius:10px;overflow-x:auto;">'
+        f'<div style="padding:10px 12px;background:{color};color:#fff;font-weight:700;">{html.escape(title)}</div>'
+        '<table style="border-collapse:collapse;width:max-content;min-width:100%;font-size:0.92rem;background:#fff;">'
+        f"<thead><tr>{header_cells}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table></div>"
+    )
+
+
+def render_cluster_detail_table_html(detail_df: pd.DataFrame, *, color: str, title: str) -> str:
+    if detail_df.empty:
+        return "<p>No row details available.</p>"
+    header_cells = "".join(
+        f'<th style="text-align:left;padding:8px 10px;background:{color};color:#fff;white-space:nowrap;">'
+        f"{html.escape(str(col))}</th>"
+        for col in detail_df.columns
+    )
+    body_rows: list[str] = []
+    for _, row in detail_df.iterrows():
+        data_cells = "".join(
+            f'<td style="padding:7px 10px;border-bottom:1px solid #eef1f4;white-space:nowrap;">'
+            f"{html.escape(_format_feature_cell(row[col]))}</td>"
+            for col in detail_df.columns
         )
         body_rows.append(f"<tr>{data_cells}</tr>")
     return (

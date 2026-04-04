@@ -21,7 +21,7 @@
   "distance_thresholds": [],
   "dead_filter": {
     "enabled": true,
-    "source": "analysis_outputs/clustering/with_entropy/registry/dead_feature_score__v1.csv",
+    "source": "analysis_outputs\\clustering\\with_entropy\\registry\\dead_feature_score__v1.csv",
     "dead_records_pct_threshold": 100.0,
     "dead_excluded_count": 19
   },
@@ -33,5 +33,5 @@
   "cluster_space_mode": "full",
   "status": "success",
   "warnings": [],
-  "timestamp_utc": "2026-03-30T08:49:31Z"
+  "timestamp_utc": "2026-04-04T08:53:21Z"
 }

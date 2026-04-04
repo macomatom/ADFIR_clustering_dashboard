@@ -33,7 +33,7 @@ def render_feature_aggrid(features_df: pd.DataFrame, *, color: str, height: int 
         gb.configure_column("rank", width=80, maxWidth=90)
     if "feature_name" in features_df.columns:
         gb.configure_column("feature_name", minWidth=260, flex=1)
-    for numeric_col in ["delta_vs_global", "cluster_value", "global_value"]:
+    for numeric_col in ["score_std", "delta_vs_global", "cluster_value", "global_value", "global_std"]:
         if numeric_col in features_df.columns:
             gb.configure_column(numeric_col, width=180, minWidth=170)
     gb.configure_grid_options(
