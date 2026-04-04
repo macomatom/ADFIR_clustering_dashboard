@@ -27,6 +27,7 @@ from dashboard.clustering_service import (
     get_cluster_top_features,
 )
 from dashboard.data_loader import DashboardRunBundle, DashboardRunOption, discover_dashboard_run_options, discover_dashboard_runs, load_dashboard_run
+from dashboard.dendrogram_runtime import ensure_dendrogram_artifacts
 from dashboard.grid_helpers import aggrid_available, render_feature_aggrid
 from dashboard.live_plotly_component import render_live_plotly
 from dashboard.plots import build_entropy_plot, build_timeline_plot
@@ -78,6 +79,14 @@ def _get_cached_timeline_defaults(run_dir: str, n_clusters: int, time_col: str, 
     bundle = _load_bundle(run_dir)
     assignments = get_assignments(bundle, n_clusters).copy()
     return get_default_timeline_viewport(assignments, time_col=time_col, window_s=window_s)
+
+
+@st.cache_data(show_spinner=False)
+def _resolve_selected_run_dir(run_dir: str, n_clusters: int) -> str:
+    bundle = _load_bundle(run_dir)
+    child_map = bundle.cluster_run_dirs_by_k or {}
+    selected_run_dir = child_map.get(int(n_clusters))
+    return str(selected_run_dir or bundle.run_dir)
 
 
 def _resolve_default_run(root: Path) -> str:
@@ -518,6 +527,40 @@ def main() -> None:
                         unsafe_allow_html=True,
                     )
                     st.dataframe(cluster_features_view, width="stretch", hide_index=True)
+
+        st.subheader("Dendrogram")
+        selected_run_dir = _resolve_selected_run_dir(run_dir, n_clusters)
+        selected_run_bundle = _load_bundle(selected_run_dir)
+        if selected_run_bundle.linkage_matrix_path is None:
+            st.info("This export does not include dendrogram linkage data yet. Regenerate and sync the run with `cluster_linkage_matrix__v1.npy`.")
+        else:
+            title = (
+                f"{selected_run_bundle.manifest.get('scope', '')} "
+                f"{selected_run_bundle.manifest.get('artifact', '')} "
+                f"{selected_run_bundle.manifest.get('aggregation', '')} "
+                f"{selected_run_bundle.manifest.get('method', '')}"
+            ).strip()
+            with st.spinner("Preparing dendrogram..."):
+                dendrogram_state = ensure_dendrogram_artifacts(
+                    run_dir=selected_run_bundle.run_dir,
+                    linkage_matrix_path=selected_run_bundle.linkage_matrix_path,
+                    title=title,
+                    method=str(selected_run_bundle.manifest.get("method", "")),
+                    linkage=str(selected_run_bundle.manifest.get("linkage", "")) or None,
+                    selected_k=int(selected_run_bundle.manifest.get("selected_k")) if selected_run_bundle.manifest.get("selected_k") is not None else None,
+                    cut_mode=str(selected_run_bundle.manifest.get("cut_mode", "")) or None,
+                    cut_value=selected_run_bundle.manifest.get("cut_value"),
+                )
+            if not dendrogram_state["available"]:
+                st.info(str(dendrogram_state.get("message") or "Dendrogram is not available for this run."))
+            else:
+                st.image(str(dendrogram_state["png_path"]), caption=f"Dendrogram for k={n_clusters}", use_container_width=True)
+                if dendrogram_state.get("cut_png_path") is not None:
+                    st.image(
+                        str(dendrogram_state["cut_png_path"]),
+                        caption=f"Dendrogram with cut overlay for k={n_clusters}",
+                        use_container_width=True,
+                    )
 
     with entropy_tab:
         st.subheader("Shannon Entropy Over Time")

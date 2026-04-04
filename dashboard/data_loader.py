@@ -38,6 +38,10 @@ class DashboardRunBundle:
     features: pd.DataFrame
     window_metrics: pd.DataFrame
     cluster_run_dirs_by_k: dict[int, Path] | None = None
+    linkage_matrix_path: Path | None = None
+    dendrogram_meta_path: Path | None = None
+    dendrogram_png_path: Path | None = None
+    dendrogram_cut_png_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -80,6 +84,23 @@ def _read_table(path: Path) -> pd.DataFrame:
 @lru_cache(maxsize=256)
 def _read_table_cached(path_str: str) -> pd.DataFrame:
     return _read_table(Path(path_str))
+
+
+def _optional_artifact_path(run_dir: Path, filename: str | None) -> Path | None:
+    if not filename:
+        return None
+    path = run_dir / str(filename)
+    return path if path.exists() else None
+
+
+def _detect_dendrogram_artifacts(run_dir: Path, manifest: dict[str, Any]) -> dict[str, Path | None]:
+    linkage_matrix_file = manifest.get("linkage_matrix_file") or "cluster_linkage_matrix__v1.npy"
+    return {
+        "linkage_matrix_path": _optional_artifact_path(run_dir, str(linkage_matrix_file) if manifest.get("dendrogram_available", False) or (run_dir / str(linkage_matrix_file)).exists() else None),
+        "dendrogram_meta_path": _optional_artifact_path(run_dir, "cluster_dendrogram_meta__v1.json"),
+        "dendrogram_png_path": _optional_artifact_path(run_dir, "cluster_dendrogram__v1.png"),
+        "dendrogram_cut_png_path": _optional_artifact_path(run_dir, "cluster_dendrogram_at_cut__v1.png"),
+    }
 
 
 def _normalize_assignments(assignments: pd.DataFrame, manifest: dict[str, Any]) -> pd.DataFrame:
@@ -144,12 +165,15 @@ def _cached_cluster_run_tables(run_dir_str: str) -> tuple[pd.DataFrame, pd.DataF
         "features_file": "cluster_features__v1.csv",
         "window_metrics_file": None,
         "time_col": "time_cluster" if "time_cluster" in assignments.columns else "row_idx",
+        "dendrogram_available": bool(manifest.get("dendrogram_available", False)),
+        "linkage_matrix_file": manifest.get("linkage_matrix_file"),
     }
     return assignments, summaries, features, window_metrics, normalized_manifest
 
 
 def _load_collection_child_bundle(run_dir: Path) -> DashboardRunBundle:
     assignments, summaries, features, window_metrics, manifest = _cached_cluster_run_tables(str(run_dir))
+    artifacts = _detect_dendrogram_artifacts(run_dir, manifest)
     _validate_required_columns(assignments, REQUIRED_ASSIGNMENT_COLS, "assignments")
     _validate_required_columns(summaries, REQUIRED_SUMMARY_COLS, "summaries")
     _validate_required_columns(features, REQUIRED_FEATURE_COLS, "features")
@@ -162,6 +186,10 @@ def _load_collection_child_bundle(run_dir: Path) -> DashboardRunBundle:
         summaries=summaries.copy(),
         features=features.copy(),
         window_metrics=window_metrics.copy(),
+        linkage_matrix_path=artifacts["linkage_matrix_path"],
+        dendrogram_meta_path=artifacts["dendrogram_meta_path"],
+        dendrogram_png_path=artifacts["dendrogram_png_path"],
+        dendrogram_cut_png_path=artifacts["dendrogram_cut_png_path"],
     )
 
 
@@ -290,6 +318,7 @@ def load_dashboard_run(run_dir: Path) -> DashboardRunBundle:
     cluster_manifest_path = run_dir / "cluster_manifest__v1.json"
     if manifest_path.exists():
         manifest = _load_manifest(manifest_path)
+        artifacts = _detect_dendrogram_artifacts(run_dir, manifest)
 
         assignments = _normalize_assignments(_read_table(run_dir / str(manifest["assignments_file"])), manifest)
         summaries = _normalize_summaries(_read_table(run_dir / str(manifest["summary_file"])), manifest)
@@ -310,6 +339,10 @@ def load_dashboard_run(run_dir: Path) -> DashboardRunBundle:
             summaries=summaries,
             features=features,
             window_metrics=window_metrics,
+            linkage_matrix_path=artifacts["linkage_matrix_path"],
+            dendrogram_meta_path=artifacts["dendrogram_meta_path"],
+            dendrogram_png_path=artifacts["dendrogram_png_path"],
+            dendrogram_cut_png_path=artifacts["dendrogram_cut_png_path"],
         )
     if cluster_manifest_path.exists():
         return _load_cluster_run(run_dir, _load_manifest(cluster_manifest_path))

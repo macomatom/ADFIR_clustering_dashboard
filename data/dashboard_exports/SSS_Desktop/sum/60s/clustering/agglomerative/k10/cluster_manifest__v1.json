@@ -8,6 +8,8 @@
   "cut_mode": "k",
   "cut_value": 10,
   "linkage": "ward",
+  "dendrogram_available": true,
+  "linkage_matrix_file": "cluster_linkage_matrix__v1.npy",
   "input_files": [
     "parquet_data\\SSS_Desktop\\agg_sum_SSS_Desktop_60s.parquet"
   ],
@@ -33,5 +35,5 @@
   "cluster_space_mode": "full",
   "status": "success",
   "warnings": [],
-  "timestamp_utc": "2026-04-04T08:58:08Z"
+  "timestamp_utc": "2026-04-04T13:59:14Z"
 }
