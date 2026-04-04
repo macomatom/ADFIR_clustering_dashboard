@@ -106,3 +106,14 @@ Methodology notes for the current clustering and interpretation setup are includ
 - no in-app recomputation of clustering; the dashboard only explores precomputed outputs
 - no automatic fetch or sync of newly generated exports from the main research repository
 - no editing or relabeling workflow directly inside the dashboard
+
+## Update to latest changes
+
+To force your local checkout to match the newest `origin/main`:
+
+```powershell
+git fetch
+git reset --hard origin/main
+```
+
+Use this only if you want to discard all local uncommitted changes.
