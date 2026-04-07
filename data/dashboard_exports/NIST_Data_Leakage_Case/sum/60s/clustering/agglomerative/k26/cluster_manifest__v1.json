@@ -11,7 +11,7 @@
   "dendrogram_available": true,
   "linkage_matrix_file": "cluster_linkage_matrix__v1.npy",
   "input_files": [
-    "parquet_data\\NIST_Data_Leakage_Case\\agg_sum_NIST_Data_Leakage_Case_60s.parquet"
+    "_tmp_parquet_dashboard_only\\NIST_Data_Leakage_Case\\agg_sum_NIST_Data_Leakage_Case_60s.parquet"
   ],
   "rows": 1219,
   "features_total": 189,
@@ -33,7 +33,37 @@
   "sum_transform": "log1p_zscore",
   "cluster_max_dim": 20,
   "cluster_space_mode": "full",
+  "cluster_id_ordering": "dendrogram_left_to_right",
+  "cluster_id_base": 0,
+  "cluster_id_mapping": {
+    "2": 0,
+    "10": 1,
+    "18": 2,
+    "23": 3,
+    "1": 4,
+    "7": 5,
+    "25": 6,
+    "13": 7,
+    "17": 8,
+    "8": 9,
+    "15": 10,
+    "0": 11,
+    "12": 12,
+    "24": 13,
+    "5": 14,
+    "19": 15,
+    "4": 16,
+    "22": 17,
+    "11": 18,
+    "21": 19,
+    "6": 20,
+    "20": 21,
+    "3": 22,
+    "14": 23,
+    "16": 24,
+    "9": 25
+  },
   "status": "success",
   "warnings": [],
-  "timestamp_utc": "2026-04-04T13:57:47Z"
+  "timestamp_utc": "2026-04-07T20:04:41Z"
 }

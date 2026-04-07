@@ -120,7 +120,7 @@ def render_cluster_summary_table(summary_df: pd.DataFrame) -> pd.DataFrame:
         "frames_within_anchor_pm2_frac",
         "pre_anchor_within_pm2_count",
         "post_anchor_within_pm2_count",
-        "attack_within_anchor_pm2_count",
+        "incident_within_anchor_pm2_count",
     ]
     leading = [col for col in priority if col in summary_df.columns]
     remaining = [col for col in summary_df.columns if col not in leading and col not in repeated_context_cols]
@@ -183,22 +183,25 @@ def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
         "time_cluster",
         "distance_from_incident_anchor",
         "abs_distance_from_incident_anchor",
-        "incident_phase_3class",
+        "incident_phase",
         "row_idx",
         "source_path",
         "window_id",
-        "is_attack_related",
         "cluster_id",
         "n_clusters",
     ]
     leading = [col for col in priority if col in detail_df.columns]
-    remaining = [col for col in detail_df.columns if col not in leading]
+    remaining = [
+        col
+        for col in detail_df.columns
+        if col not in leading and col not in {"is_attack_related", "incident_phase_3class"}
+    ]
     out = detail_df[leading + remaining].copy()
     if "distance_from_incident_anchor_human" in out.columns and "distance_from_incident_anchor" in out.columns:
         out["distance_from_incident_anchor"] = out["distance_from_incident_anchor_human"]
     if "abs_distance_from_incident_anchor_human" in out.columns and "abs_distance_from_incident_anchor" in out.columns:
         out["abs_distance_from_incident_anchor"] = out["abs_distance_from_incident_anchor_human"]
-    for col in ["row_idx", "is_attack_related", "cluster_id", "n_clusters"]:
+    for col in ["row_idx", "cluster_id", "n_clusters"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     drop_cols = [col for col in ["distance_from_incident_anchor_human", "abs_distance_from_incident_anchor_human"] if col in out.columns]

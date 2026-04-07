@@ -11,7 +11,7 @@
   "dendrogram_available": true,
   "linkage_matrix_file": "cluster_linkage_matrix__v1.npy",
   "input_files": [
-    "parquet_data\\Magnet_CTF_2022_Windows_Laptop\\agg_sum_Magnet_CTF_2022_Windows_Laptop_60s.parquet"
+    "_tmp_parquet_dashboard_only\\Magnet_CTF_2022_Windows_Laptop\\agg_sum_Magnet_CTF_2022_Windows_Laptop_60s.parquet"
   ],
   "rows": 4745,
   "features_total": 189,
@@ -33,7 +33,27 @@
   "sum_transform": "log1p_zscore",
   "cluster_max_dim": 20,
   "cluster_space_mode": "full",
+  "cluster_id_ordering": "dendrogram_left_to_right",
+  "cluster_id_base": 0,
+  "cluster_id_mapping": {
+    "10": 0,
+    "11": 1,
+    "9": 2,
+    "2": 3,
+    "1": 4,
+    "15": 5,
+    "5": 6,
+    "12": 7,
+    "14": 8,
+    "3": 9,
+    "8": 10,
+    "6": 11,
+    "7": 12,
+    "13": 13,
+    "4": 14,
+    "0": 15
+  },
   "status": "success",
   "warnings": [],
-  "timestamp_utc": "2026-04-04T13:55:48Z"
+  "timestamp_utc": "2026-04-07T20:01:58Z"
 }

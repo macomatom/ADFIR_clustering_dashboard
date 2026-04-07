@@ -17,10 +17,10 @@ TIMELINE_MAX_RENDER_MISSING_BARS = 120
 
 
 def _build_attack_window_trace(timeline_df: pd.DataFrame) -> go.Scatter | None:
-    if timeline_df.empty or "incident_phase_3class" not in timeline_df.columns or "timeline_x" not in timeline_df.columns:
+    if timeline_df.empty or "incident_phase" not in timeline_df.columns or "timeline_x" not in timeline_df.columns:
         return None
 
-    phase_values = timeline_df["incident_phase_3class"].astype(str).str.strip().str.lower()
+    phase_values = timeline_df["incident_phase"].astype(str).str.strip().str.lower()
     attack_df = timeline_df.loc[phase_values == "incident_window", ["timeline_x"]].copy()
     if attack_df.empty:
         return None
@@ -129,8 +129,8 @@ def _compress_timeline_rows(df: pd.DataFrame, *, window_s: int | None, max_bars:
             else pd.Series([len(bucket_df)], index=bucket_df.index, dtype="float64")
         )
         row["row_idx"] = int(row_idx_values.fillna(0).sum()) or int(len(bucket_df))
-        phase_mode = bucket_df["incident_phase_3class"].astype(str).mode(dropna=False)
-        row["incident_phase_3class"] = phase_mode.iloc[0] if not phase_mode.empty else row.get("incident_phase_3class", "")
+        phase_mode = bucket_df["incident_phase"].astype(str).mode(dropna=False)
+        row["incident_phase"] = phase_mode.iloc[0] if not phase_mode.empty else row.get("incident_phase", "")
         if "_is_missing" in bucket_df.columns and bool(bucket_df["_is_missing"].all()):
             row["cluster_id"] = pd.NA
             row["_is_missing"] = True
@@ -175,7 +175,7 @@ def _compress_timeline_rows(df: pd.DataFrame, *, window_s: int | None, max_bars:
         row["_hover"] = [
             f"{bucket_df['timeline_x'].iloc[0]} -> {bucket_df['timeline_x'].iloc[-1]}",
             str(row.get("cluster_id", "missing")) if pd.notna(row.get("cluster_id", pd.NA)) else "missing",
-            str(row.get("incident_phase_3class", "")),
+            str(row.get("incident_phase", "")),
             int(row["row_idx"]),
         ]
         compressed_rows.append(row.to_dict())
@@ -222,11 +222,11 @@ def _coarsen_missing_gaps(df: pd.DataFrame, *, window_s: int | None) -> pd.DataF
         if len(bucket_df) > 1:
             row_count = int(pd.to_numeric(bucket_df.get("row_idx"), errors="coerce").fillna(0).sum())
             row["row_idx"] = row_count if row_count > 0 else int(len(bucket_df))
-            row["incident_phase_3class"] = f"missing ({row['row_idx']} windows)"
+            row["incident_phase"] = f"missing ({row['row_idx']} windows)"
             row["_hover"] = [
                 f"{bucket_df['timeline_x'].iloc[0]} -> {bucket_df['timeline_x'].iloc[-1]}",
                 "missing",
-                str(row["incident_phase_3class"]),
+                str(row["incident_phase"]),
                 int(row["row_idx"]),
             ]
         rows.append(row.to_dict())
@@ -287,7 +287,7 @@ def _build_dense_timeline_slots(
                         "timeline_x": midpoint,
                         "time_cluster": f"{prev_time} -> {next_time}",
                         "cluster_id": pd.NA,
-                        "incident_phase_3class": f"missing ({missing_count} windows)",
+                        "incident_phase": f"missing ({missing_count} windows)",
                         "row_idx": missing_count,
                         "is_missing_window": True,
                         "_bar_width": float(missing_count * step_seconds * 1000),
@@ -312,7 +312,7 @@ def _build_dense_timeline_slots(
                         "timeline_x": midpoint,
                         "time_cluster": f"{prev_value} -> {next_value}",
                         "cluster_id": pd.NA,
-                        "incident_phase_3class": f"missing ({missing_count} windows)",
+                        "incident_phase": f"missing ({missing_count} windows)",
                         "row_idx": missing_count,
                         "is_missing_window": True,
                         "_bar_width": float(missing_count * step_seconds),
@@ -356,6 +356,7 @@ def build_timeline_plot(
     highlighted_clusters: list[int],
     mute_non_selected: bool,
     title: str,
+    cluster_colors: dict[int, str] | None = None,
     window_s: int | None = None,
     missing_source_df: pd.DataFrame | None = None,
     max_present_bars: int | None = None,
@@ -369,9 +370,15 @@ def build_timeline_plot(
         return fig
 
     cluster_ids = sorted(pd.to_numeric(timeline_df["cluster_id"], errors="coerce").dropna().astype(int).unique().tolist())
-    colors = cluster_color_map(cluster_ids)
+    colors = {int(cluster_id): color for cluster_id, color in (cluster_colors or {}).items()}
+    fallback_colors = cluster_color_map(cluster_ids)
+    if not colors:
+        colors = fallback_colors
+    else:
+        for cluster_id in cluster_ids:
+            colors.setdefault(int(cluster_id), fallback_colors.get(int(cluster_id), "rgb(220,220,220)"))
     highlighted = set(int(x) for x in highlighted_clusters)
-    hover_cols = ["time_cluster", "cluster_id", "incident_phase_3class", "row_idx"]
+    hover_cols = ["time_cluster", "cluster_id", "incident_phase", "row_idx"]
     missing_source = missing_source_df if missing_source_df is not None else timeline_df
     dense_timeline = _build_dense_timeline_slots(timeline_df, missing_source_df=missing_source, window_s=window_s)
     for col in hover_cols:
@@ -446,7 +453,7 @@ def build_timeline_plot(
                 hovertemplate=(
                     "time_cluster=%{customdata[0]}<br>"
                     "cluster_id=%{customdata[1]}<br>"
-                    "incident_phase_3class=%{customdata[2]}<br>"
+                    "incident_phase=%{customdata[2]}<br>"
                     "row_idx=%{customdata[3]}<extra></extra>"
                 ),
                 showlegend=False,
@@ -466,7 +473,7 @@ def build_timeline_plot(
                 hovertemplate=(
                     "time_cluster=%{customdata[0]}<br>"
                     "cluster_id=%{customdata[1]}<br>"
-                    "incident_phase_3class=%{customdata[2]}<br>"
+                    "incident_phase=%{customdata[2]}<br>"
                     "row_idx=%{customdata[3]}<extra></extra>"
                 ),
                 showlegend=False,

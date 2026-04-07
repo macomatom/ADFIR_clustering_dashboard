@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import sys
 from pathlib import Path
 from typing import Any
@@ -29,7 +28,6 @@ from dashboard.clustering_service import (
 from dashboard.data_loader import DashboardRunBundle, DashboardRunOption, discover_dashboard_run_options, discover_dashboard_runs, load_dashboard_run
 from dashboard.dendrogram_runtime import ensure_dendrogram_artifacts
 from dashboard.grid_helpers import aggrid_available, render_feature_aggrid
-from dashboard.live_plotly_component import render_live_plotly
 from dashboard.plots import build_entropy_plot, build_timeline_plot
 from dashboard.ui_helpers import (
     build_cluster_option_labels,
@@ -90,8 +88,8 @@ def _resolve_selected_run_dir(run_dir: str, n_clusters: int) -> str:
 
 
 def _resolve_default_run(root: Path) -> str:
-    runs = discover_dashboard_runs(root)
-    return str(runs[0]) if runs else ""
+    options = _preferred_run_options(_discover_run_options(str(root)))
+    return str(options[0].run_dir) if options else ""
 
 
 @st.cache_data(show_spinner=False)
@@ -103,17 +101,15 @@ def _preferred_run_options(options: list[DashboardRunOption]) -> list[DashboardR
     preferred = [
         option
         for option in options
-        if option.aggregation == "sum" and option.window_s == 60 and option.method == "agglomerative"
+        if option.window_s == 60 and option.method == "agglomerative"
     ]
     return preferred or options
 
 
-def _build_dataset_option_map(options: list[DashboardRunOption]) -> dict[str, DashboardRunOption]:
-    artifact_counts = Counter(option.artifact for option in options)
-    labels: dict[str, DashboardRunOption] = {}
+def _build_dataset_option_map(options: list[DashboardRunOption]) -> dict[str, list[DashboardRunOption]]:
+    labels: dict[str, list[DashboardRunOption]] = {}
     for option in options:
-        label = option.artifact if artifact_counts[option.artifact] == 1 else option.label
-        labels[label] = option
+        labels.setdefault(option.artifact, []).append(option)
     return labels
 
 
@@ -247,9 +243,23 @@ def main() -> None:
         selected_dataset_label = st.sidebar.selectbox("Dataset", options=list(option_map.keys()), index=0)
     else:
         selected_dataset_label = ""
-    selected_option = option_map.get(selected_dataset_label)
-    run_dir_default = str(selected_option.run_dir) if selected_option else default_run
-    run_dir = st.sidebar.text_input("Dashboard run directory", value=run_dir_default)
+    dataset_options = option_map.get(selected_dataset_label, [])
+    aggregation_map = {option.aggregation: option for option in dataset_options}
+    aggregation_options = [agg for agg in ["sum", "max"] if agg in aggregation_map]
+    aggregation_options.extend(sorted(agg for agg in aggregation_map if agg not in {"sum", "max"}))
+    if aggregation_options:
+        default_aggregation = "sum" if "sum" in aggregation_options else aggregation_options[0]
+        selected_aggregation = st.sidebar.selectbox(
+            "Aggregation",
+            options=aggregation_options,
+            index=aggregation_options.index(default_aggregation),
+        )
+    else:
+        selected_aggregation = ""
+    selected_option = aggregation_map.get(selected_aggregation) if aggregation_map else None
+    run_dir = str(selected_option.run_dir) if selected_option else default_run
+    if run_dir:
+        st.sidebar.caption(f"Run: `{run_dir}`")
     if not run_dir:
         st.info("Provide a dashboard run directory containing dashboard_manifest__v1.json.")
         return
@@ -318,6 +328,7 @@ def main() -> None:
             highlighted_clusters=highlighted_clusters,
             mute_non_selected=mute_non_selected,
             title=f"Timeline overview for k={n_clusters}",
+            cluster_colors=cluster_colors,
             window_s=window_s,
             missing_source_df=invariant_timeline_df,
             max_present_bars=900,
@@ -363,6 +374,7 @@ def main() -> None:
             highlighted_clusters=highlighted_clusters,
             mute_non_selected=mute_non_selected,
             title=f"Timeline detail for k={n_clusters}",
+            cluster_colors=cluster_colors,
             window_s=window_s,
             missing_source_df=detail_missing_df,
             max_present_bars=target_bars,
@@ -371,29 +383,7 @@ def main() -> None:
             height=340,
         )
         st.subheader("Timeline detail")
-        live_event = render_live_plotly(
-            detail_fig,
-            key=f"timeline_detail::{run_dir}::{n_clusters}",
-            height=360,
-        )
-        if live_event.get("reset_requested"):
-            timeline_state["x_min"] = _serialize_axis_value(timeline_defaults.get("x_min"), time_mode=time_mode)
-            timeline_state["x_max"] = _serialize_axis_value(timeline_defaults.get("x_max"), time_mode=time_mode)
-            st.rerun()
-        next_width = pd.to_numeric(pd.Series([live_event.get("container_width_px")]), errors="coerce").iloc[0]
-        if pd.notna(next_width):
-            current_width = pd.to_numeric(pd.Series([timeline_state.get("container_width_px")]), errors="coerce").iloc[0]
-            if pd.isna(current_width) or abs(float(next_width) - float(current_width)) >= 8.0:
-                timeline_state["container_width_px"] = int(next_width)
-                st.rerun()
-        if _viewport_changed(timeline_state.get("x_min"), live_event.get("x_min"), time_mode=time_mode) or _viewport_changed(
-            timeline_state.get("x_max"),
-            live_event.get("x_max"),
-            time_mode=time_mode,
-        ):
-            timeline_state["x_min"] = _serialize_axis_value(live_event.get("x_min"), time_mode=time_mode)
-            timeline_state["x_max"] = _serialize_axis_value(live_event.get("x_max"), time_mode=time_mode)
-            st.rerun()
+        st.plotly_chart(detail_fig, width="stretch")
 
         with st.expander("Run context", expanded=False):
             context_view = sanitize_for_streamlit(render_cluster_summary_context(summary))
@@ -413,7 +403,7 @@ def main() -> None:
                 "frames_within_anchor_pm2_frac": st.column_config.NumberColumn("frames_within_anchor_pm2_frac", width="large"),
                 "pre_anchor_within_pm2_count": st.column_config.NumberColumn("pre_anchor_within_pm2_count", width="large"),
                 "post_anchor_within_pm2_count": st.column_config.NumberColumn("post_anchor_within_pm2_count", width="large"),
-                "attack_within_anchor_pm2_count": st.column_config.NumberColumn("attack_within_anchor_pm2_count", width="large"),
+                "incident_within_anchor_pm2_count": st.column_config.NumberColumn("incident_within_anchor_pm2_count", width="large"),
             },
         )
 
@@ -434,13 +424,13 @@ def main() -> None:
                     boundary_count = summary_row.get("frames_within_anchor_pm2", pd.NA)
                     pre_count = summary_row.get("pre_anchor_within_pm2_count", pd.NA)
                     post_count = summary_row.get("post_anchor_within_pm2_count", pd.NA)
-                    attack_count = summary_row.get("attack_within_anchor_pm2_count", pd.NA)
+                    incident_count = summary_row.get("incident_within_anchor_pm2_count", pd.NA)
                     if pd.isna(anchor_time):
                         st.caption("Boundary diagnostics: unavailable for this dataset because no incident anchor is present in the bundled labels.")
                     else:
                         caption = (
                             f"Boundary diagnostics (+/-2 windows): within={boundary_count}, pre={pre_count}, "
-                            f"post={post_count}, attack={attack_count}, closest={closest_distance}, anchor={anchor_time}"
+                            f"post={post_count}, incident={incident_count}, closest={closest_distance}, anchor={anchor_time}"
                         )
                         if pd.notna(boundary_count) and float(boundary_count) == 0.0 and pd.notna(closest_distance):
                             caption += " | No rows from this cluster fall within +/-2 windows of the incident anchor."
@@ -554,12 +544,12 @@ def main() -> None:
             if not dendrogram_state["available"]:
                 st.info(str(dendrogram_state.get("message") or "Dendrogram is not available for this run."))
             else:
-                st.image(str(dendrogram_state["png_path"]), caption=f"Dendrogram for k={n_clusters}", use_container_width=True)
+                st.image(str(dendrogram_state["png_path"]), caption=f"Dendrogram for k={n_clusters}", width="stretch")
                 if dendrogram_state.get("cut_png_path") is not None:
                     st.image(
                         str(dendrogram_state["cut_png_path"]),
                         caption=f"Dendrogram with cut overlay for k={n_clusters}",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
     with entropy_tab:

@@ -1,0 +1,39 @@
+{
+  "scope": "per_dataset",
+  "artifact": "SSS_DC",
+  "aggregation": "max",
+  "window_s": 60,
+  "selected_k": 14,
+  "method": "agglomerative",
+  "cut_mode": "k",
+  "cut_value": 14,
+  "linkage": "ward",
+  "dendrogram_available": true,
+  "linkage_matrix_file": "cluster_linkage_matrix__v1.npy",
+  "input_files": [
+    "parquet_data\\SSS_DC\\agg_max_SSS_DC_60s.parquet"
+  ],
+  "rows": 652,
+  "features_total": 189,
+  "random_state": 42,
+  "exclude_cols": [],
+  "corr_prune_thr": 0.0,
+  "corr_prune_dropped_count": 0,
+  "distance_jump_top": 5,
+  "distance_thresholds": [],
+  "dead_filter": {
+    "enabled": true,
+    "source": "analysis_outputs\\clustering\\with_entropy\\registry\\dead_feature_score__v1.csv",
+    "dead_records_pct_threshold": 100.0,
+    "dead_excluded_count": 19
+  },
+  "manual_exclude_list_enabled": true,
+  "manual_exclude_list_size": 24,
+  "include_entropy_features": false,
+  "sum_transform": "log1p_zscore",
+  "cluster_max_dim": 20,
+  "cluster_space_mode": "full",
+  "status": "success",
+  "warnings": [],
+  "timestamp_utc": "2026-04-07T16:39:05Z"
+}

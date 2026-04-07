@@ -1,0 +1,27 @@
+{
+  "enabled": true,
+  "scope": "per_dataset",
+  "allowed_scopes": [
+    "per_dataset"
+  ],
+  "rows": 652,
+  "max_rows": 20000,
+  "method": "agglomerative",
+  "linkage": "ward",
+  "top_levels": 10,
+  "display_levels": 2,
+  "render_style_version": 9,
+  "selected_k": 28,
+  "cut_mode": "k",
+  "cut_value": 28.0,
+  "resolved_cut_height": 4.848170279272087,
+  "truncation_strategy": "cut_expand_2",
+  "levels_below_cut": 2,
+  "display_leaf_count": 96,
+  "display_internal_count": 95,
+  "written": true,
+  "written_cut_level": false,
+  "skip_reason": "",
+  "focus_center": 0.1,
+  "focus_band_halfwidth": 0.17
+}

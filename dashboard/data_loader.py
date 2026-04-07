@@ -27,6 +27,7 @@ REQUIRED_SUMMARY_COLS = {"n_clusters", "cluster_id", "cluster_size", "cluster_fr
 REQUIRED_FEATURE_COLS = {"n_clusters", "cluster_id", "rank", "feature_name", "delta_vs_global", "cluster_value", "global_value"}
 PREFERRED_FEATURE_COLS = {"global_std", "score_std", "direction"}
 REQUIRED_WINDOW_METRIC_COLS = {"window_id", "row_idx"}
+EXCLUDED_ARTIFACTS = {"SSS_DC", "SSS_Desktop"}
 
 
 @dataclass(slots=True)
@@ -105,6 +106,8 @@ def _detect_dendrogram_artifacts(run_dir: Path, manifest: dict[str, Any]) -> dic
 
 def _normalize_assignments(assignments: pd.DataFrame, manifest: dict[str, Any]) -> pd.DataFrame:
     out = assignments.copy()
+    if "incident_phase" not in out.columns and "incident_phase_3class" in out.columns:
+        out["incident_phase"] = out["incident_phase_3class"]
     if "n_clusters" not in out.columns and "selected_k" in out.columns:
         out["n_clusters"] = pd.to_numeric(out["selected_k"], errors="coerce")
     if "window_id" not in out.columns:
@@ -165,6 +168,7 @@ def _cached_cluster_run_tables(run_dir_str: str) -> tuple[pd.DataFrame, pd.DataF
         "features_file": "cluster_features__v1.csv",
         "window_metrics_file": None,
         "time_col": "time_cluster" if "time_cluster" in assignments.columns else "row_idx",
+        "phase_col": "incident_phase" if "incident_phase" in assignments.columns else manifest.get("phase_col"),
         "dendrogram_available": bool(manifest.get("dendrogram_available", False)),
         "linkage_matrix_file": manifest.get("linkage_matrix_file"),
     }
@@ -222,6 +226,15 @@ def _build_run_label(*, artifact: str, aggregation: str, window_s: int | None, m
     return " | ".join(parts)
 
 
+def _artifact_allowed(artifact: str) -> bool:
+    return artifact not in EXCLUDED_ARTIFACTS
+
+
+def _ensure_supported_artifact(artifact: str) -> None:
+    if not _artifact_allowed(artifact):
+        raise FileNotFoundError(f"Artifact '{artifact}' is excluded from this dashboard.")
+
+
 def _describe_run(run_dir: Path) -> DashboardRunOption:
     child_cluster_runs = _cluster_child_run_dirs(run_dir) if run_dir.exists() and run_dir.is_dir() else []
     inferred_artifact, inferred_aggregation, inferred_window_s = _infer_run_context_from_path(run_dir)
@@ -249,6 +262,7 @@ def _describe_run(run_dir: Path) -> DashboardRunOption:
             raise FileNotFoundError(f"Missing dashboard manifest under: {run_dir}")
 
     artifact = str(manifest.get("artifact") or inferred_artifact)
+    _ensure_supported_artifact(artifact)
     aggregation = str(manifest.get("aggregation") or inferred_aggregation)
     window_s = _coerce_int(manifest.get("window_s"))
     if window_s is None:
@@ -282,6 +296,7 @@ def _load_cluster_collection_run(run_dir: Path) -> DashboardRunBundle:
     if not child_entries:
         raise FileNotFoundError(f"No supported cluster child runs found under: {run_dir}")
     latest_manifest = max(child_entries, key=lambda item: _selected_k_from_manifest(item[1]) or -1)[1]
+    _ensure_supported_artifact(str(latest_manifest.get("artifact") or run_dir.name))
     available_k = sorted(
         {
             int(k)
@@ -318,6 +333,7 @@ def load_dashboard_run(run_dir: Path) -> DashboardRunBundle:
     cluster_manifest_path = run_dir / "cluster_manifest__v1.json"
     if manifest_path.exists():
         manifest = _load_manifest(manifest_path)
+        _ensure_supported_artifact(str(manifest.get("artifact") or run_dir.name))
         artifacts = _detect_dendrogram_artifacts(run_dir, manifest)
 
         assignments = _normalize_assignments(_read_table(run_dir / str(manifest["assignments_file"])), manifest)
@@ -345,7 +361,9 @@ def load_dashboard_run(run_dir: Path) -> DashboardRunBundle:
             dendrogram_cut_png_path=artifacts["dendrogram_cut_png_path"],
         )
     if cluster_manifest_path.exists():
-        return _load_cluster_run(run_dir, _load_manifest(cluster_manifest_path))
+        manifest = _load_manifest(cluster_manifest_path)
+        _ensure_supported_artifact(str(manifest.get("artifact") or run_dir.name))
+        return _load_cluster_run(run_dir, manifest)
     raise FileNotFoundError(f"Missing dashboard manifest: {manifest_path} or cluster manifest: {cluster_manifest_path}")
 
 
@@ -385,7 +403,9 @@ def discover_dashboard_run_options(root: Path) -> list[DashboardRunOption]:
     options: list[DashboardRunOption] = []
     for run_dir in discover_dashboard_runs(root):
         try:
-            options.append(_describe_run(run_dir))
+            option = _describe_run(run_dir)
+            if _artifact_allowed(option.artifact):
+                options.append(option)
         except FileNotFoundError:
             continue
     return options

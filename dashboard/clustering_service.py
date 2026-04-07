@@ -13,11 +13,10 @@ DETAIL_PRIORITY_COLS: tuple[str, ...] = (
     "distance_from_incident_anchor_human",
     "distance_from_incident_anchor",
     "abs_distance_from_incident_anchor",
-    "incident_phase_3class",
+    "incident_phase",
     "row_idx",
     "source_path",
     "window_id",
-    "is_attack_related",
     "cluster_id",
     "n_clusters",
 )
@@ -73,20 +72,19 @@ def _coerce_time_values(series: pd.Series) -> tuple[pd.Series, str | None]:
     return pd.Series([pd.NA] * len(series), index=series.index, dtype="Float64"), None
 
 
+def _incident_phase_mask(series: pd.Series) -> pd.Series:
+    normalized = series.astype("string").str.strip().str.lower()
+    return normalized.isin({"incident_window", "incident", "1"})
+
+
 def _resolve_anchor_time(assignments_df: pd.DataFrame, *, time_col: str) -> tuple[Any, str | None]:
     if time_col not in assignments_df.columns:
         return None, None
     time_values, time_mode = _coerce_time_values(assignments_df[time_col])
     if time_mode is None:
         return None, None
-    if "incident_phase_3class" in assignments_df.columns:
-        phase_values = assignments_df["incident_phase_3class"].astype(str).str.strip().str.lower()
-        incident_times = time_values.loc[phase_values == "incident_window"].dropna()
-        if not incident_times.empty:
-            return incident_times.min(), time_mode
-    if "is_attack_related" in assignments_df.columns:
-        label = pd.to_numeric(assignments_df["is_attack_related"], errors="coerce").fillna(0)
-        incident_times = time_values.loc[label > 0].dropna()
+    if "incident_phase" in assignments_df.columns:
+        incident_times = time_values.loc[_incident_phase_mask(assignments_df["incident_phase"])].dropna()
         if not incident_times.empty:
             return incident_times.min(), time_mode
     return None, time_mode
@@ -256,7 +254,7 @@ def _build_boundary_metrics(assignments_df: pd.DataFrame, summary_df: pd.DataFra
         out["frames_within_anchor_pm2_frac"] = pd.NA
         out["pre_anchor_within_pm2_count"] = pd.NA
         out["post_anchor_within_pm2_count"] = pd.NA
-        out["attack_within_anchor_pm2_count"] = pd.NA
+        out["incident_within_anchor_pm2_count"] = pd.NA
         return out
 
     detail = assignments_df.copy()
@@ -270,7 +268,11 @@ def _build_boundary_metrics(assignments_df: pd.DataFrame, summary_df: pd.DataFra
     )
     detail["abs_distance_from_incident_anchor"] = pd.to_numeric(detail["distance_from_incident_anchor"], errors="coerce").abs()
     within_mask = detail["abs_distance_from_incident_anchor"] <= float(BOUNDARY_WINDOW_THRESHOLD)
-    label = pd.to_numeric(detail["is_attack_related"], errors="coerce").fillna(0) if "is_attack_related" in detail.columns else pd.Series(0, index=detail.index)
+    incident_mask = (
+        _incident_phase_mask(detail["incident_phase"])
+        if "incident_phase" in detail.columns
+        else pd.Series(False, index=detail.index, dtype="boolean")
+    )
 
     metrics_rows: list[dict[str, Any]] = []
     for cluster_id in pd.to_numeric(out["cluster_id"], errors="coerce").fillna(-1).astype(int).tolist():
@@ -286,7 +288,7 @@ def _build_boundary_metrics(assignments_df: pd.DataFrame, summary_df: pd.DataFra
                 "frames_within_anchor_pm2_frac": float(len(cluster_within) / len(cluster_rows)) if len(cluster_rows) else pd.NA,
                 "pre_anchor_within_pm2_count": int((pd.to_numeric(cluster_within["distance_from_incident_anchor"], errors="coerce") < 0).sum()),
                 "post_anchor_within_pm2_count": int((pd.to_numeric(cluster_within["distance_from_incident_anchor"], errors="coerce") > 0).sum()),
-                "attack_within_anchor_pm2_count": int(label.loc[cluster_within.index].gt(0).sum()),
+                "incident_within_anchor_pm2_count": int(incident_mask.loc[cluster_within.index].fillna(False).sum()),
             }
         )
     metrics_df = pd.DataFrame(metrics_rows)
