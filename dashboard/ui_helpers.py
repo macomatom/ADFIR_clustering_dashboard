@@ -185,8 +185,6 @@ def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
         "abs_distance_from_incident_anchor",
         "incident_phase",
         "row_idx",
-        "source_path",
-        "window_id",
         "cluster_id",
         "n_clusters",
     ]
@@ -194,7 +192,7 @@ def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
     remaining = [
         col
         for col in detail_df.columns
-        if col not in leading and col not in {"is_attack_related", "incident_phase_3class"}
+        if col not in leading and col not in {"is_attack_related", "incident_phase_3class", "source_path", "window_id"}
     ]
     out = detail_df[leading + remaining].copy()
     if "distance_from_incident_anchor_human" in out.columns and "distance_from_incident_anchor" in out.columns:
