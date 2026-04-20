@@ -5,7 +5,7 @@ from typing import Any
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 
-from .data_loader import DashboardRunBundle, load_dashboard_run
+from .data_loader import DashboardRunBundle, load_dashboard_run, load_score_comparison_table
 
 
 DETAIL_PRIORITY_COLS: tuple[str, ...] = (
@@ -423,6 +423,32 @@ def build_timeline_df(assignments_df: pd.DataFrame, *, time_col: str) -> pd.Data
     timeline["timeline_x"] = timeline[time_col]
     timeline["cluster_id"] = pd.to_numeric(timeline["cluster_id"], errors="coerce").fillna(-1).astype(int)
     return timeline
+
+
+def get_cluster_score_comparison(bundle: DashboardRunBundle, selected_k: int | None = None) -> tuple[pd.DataFrame, str | None]:
+    if bundle.score_comparison_path is None:
+        return pd.DataFrame(), "Score comparison file is not available for this run."
+    try:
+        out = load_score_comparison_table(bundle.score_comparison_path).copy()
+    except Exception as exc:  # noqa: BLE001
+        return pd.DataFrame(), f"Unable to load score comparison file: {type(exc).__name__}: {exc}"
+    if out.empty:
+        return out, None
+    for col in ["selected_k", "silhouette_score", "davies_bouldin_score", "calinski_harabasz_score"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    available_k = set(get_available_k(bundle))
+    should_filter_to_bundle_k = bundle.score_comparison_path.parent == bundle.run_dir or len(available_k) > 1
+    if available_k and "selected_k" in out.columns and should_filter_to_bundle_k:
+        out = out[out["selected_k"].isin(available_k)].copy()
+    out = out.sort_values("selected_k", ascending=True, na_position="last").reset_index(drop=True)
+    out["is_selected_k"] = False
+    if selected_k is not None and "selected_k" in out.columns:
+        out["is_selected_k"] = pd.to_numeric(out["selected_k"], errors="coerce").fillna(-1).astype(int) == int(selected_k)
+    out["silhouette_rank"] = pd.to_numeric(out["silhouette_score"], errors="coerce").rank(method="dense", ascending=False).astype("Int64")
+    out["davies_bouldin_rank"] = pd.to_numeric(out["davies_bouldin_score"], errors="coerce").rank(method="dense", ascending=True).astype("Int64")
+    out["calinski_harabasz_rank"] = pd.to_numeric(out["calinski_harabasz_score"], errors="coerce").rank(method="dense", ascending=False).astype("Int64")
+    return out, None
 
 
 def build_summary_metrics(assignments_df: pd.DataFrame, summary_df: pd.DataFrame, active_cluster: int | None) -> dict[str, Any]:

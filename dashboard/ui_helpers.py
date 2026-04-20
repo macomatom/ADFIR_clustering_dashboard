@@ -176,6 +176,29 @@ def render_cluster_summary_dataframe(summary_df: pd.DataFrame) -> pd.DataFrame:
     return render_cluster_summary_table(summary_df)
 
 
+def render_cluster_score_comparison_table(score_df: pd.DataFrame) -> pd.DataFrame:
+    if score_df.empty:
+        return score_df
+    out = score_df.copy()
+    if "is_selected_k" in out.columns:
+        out["selected"] = out["is_selected_k"].map(lambda value: "current" if bool(value) else "")
+    preferred_cols = [
+        "selected_k",
+        "selected",
+        "silhouette_score",
+        "silhouette_rank",
+        "davies_bouldin_score",
+        "davies_bouldin_rank",
+        "calinski_harabasz_score",
+        "calinski_harabasz_rank",
+        "is_selected_k",
+    ]
+    keep = [col for col in preferred_cols if col in out.columns]
+    if "is_selected_k" in keep:
+        keep.remove("is_selected_k")
+    return out[keep].copy()
+
+
 def render_cluster_detail_table(detail_df: pd.DataFrame) -> pd.DataFrame:
     if detail_df.empty:
         return detail_df

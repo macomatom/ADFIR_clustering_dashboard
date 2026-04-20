@@ -70,6 +70,7 @@ The dashboard currently supports:
 - dual-view feature importance for each cluster
 - a `Cluster windows` table with time context and original parquet row references
 - boundary diagnostics showing which frames lie close to the estimated attack start
+- a precomputed clustering score comparison table across all available `k` values for the selected run
 - a Shannon entropy view when entropy data are present in the loaded export
 
 ## Using your own data
@@ -94,6 +95,30 @@ data/dashboard_exports/<dataset>/sum/60s/clustering/agglomerative
 ```
 
 and discover the available `k` values from its subdirectories.
+
+## Precompute score comparison Excel files
+
+The clustering score comparison section reads a precomputed Excel file named:
+
+- `cluster_score_comparison__v1.xlsx`
+
+This file is expected in the run directory, for example:
+
+```text
+data/dashboard_exports/<dataset>/sum/60s/clustering/agglomerative/cluster_score_comparison__v1.xlsx
+```
+
+To generate these files for all supported bundled runs:
+
+```powershell
+uv run python generate_score_comparison_excel.py
+```
+
+To generate the file for one specific run directory only:
+
+```powershell
+uv run python generate_score_comparison_excel.py --run-dir data/dashboard_exports/<dataset>/sum/60s/clustering/agglomerative
+```
 
 ## Methodology
 

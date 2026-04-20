@@ -27,7 +27,10 @@ REQUIRED_SUMMARY_COLS = {"n_clusters", "cluster_id", "cluster_size", "cluster_fr
 REQUIRED_FEATURE_COLS = {"n_clusters", "cluster_id", "rank", "feature_name", "delta_vs_global", "cluster_value", "global_value"}
 PREFERRED_FEATURE_COLS = {"global_std", "score_std", "direction"}
 REQUIRED_WINDOW_METRIC_COLS = {"window_id", "row_idx"}
+REQUIRED_SCORE_COMPARISON_COLS = {"selected_k", "silhouette_score", "davies_bouldin_score", "calinski_harabasz_score"}
 EXCLUDED_ARTIFACTS = {"SSS_DC", "SSS_Desktop"}
+SCORE_COMPARISON_FILENAME = "cluster_score_comparison__v1.xlsx"
+SCORE_COMPARISON_SHEET = "score_comparison"
 
 
 @dataclass(slots=True)
@@ -39,6 +42,7 @@ class DashboardRunBundle:
     features: pd.DataFrame
     window_metrics: pd.DataFrame
     cluster_run_dirs_by_k: dict[int, Path] | None = None
+    score_comparison_path: Path | None = None
     linkage_matrix_path: Path | None = None
     dendrogram_meta_path: Path | None = None
     dendrogram_png_path: Path | None = None
@@ -87,11 +91,35 @@ def _read_table_cached(path_str: str) -> pd.DataFrame:
     return _read_table(Path(path_str))
 
 
+@lru_cache(maxsize=256)
+def _read_excel_cached(path_str: str, sheet_name: str) -> pd.DataFrame:
+    return pd.read_excel(Path(path_str), sheet_name=sheet_name)
+
+
 def _optional_artifact_path(run_dir: Path, filename: str | None) -> Path | None:
     if not filename:
         return None
     path = run_dir / str(filename)
     return path if path.exists() else None
+
+
+def _resolve_score_comparison_path(run_dir: Path) -> Path | None:
+    direct = _optional_artifact_path(run_dir, SCORE_COMPARISON_FILENAME)
+    if direct is not None:
+        return direct
+    parent = run_dir.parent
+    if parent != run_dir:
+        if _optional_artifact_path(parent, SCORE_COMPARISON_FILENAME) is not None:
+            return _optional_artifact_path(parent, SCORE_COMPARISON_FILENAME)
+        if any((child / "cluster_manifest__v1.json").exists() for child in parent.iterdir() if child.is_dir()):
+            return _optional_artifact_path(parent, SCORE_COMPARISON_FILENAME)
+    return None
+
+
+def load_score_comparison_table(path: Path) -> pd.DataFrame:
+    out = _read_excel_cached(str(path), SCORE_COMPARISON_SHEET).copy()
+    _validate_required_columns(out, REQUIRED_SCORE_COMPARISON_COLS, "score_comparison")
+    return out
 
 
 def _detect_dendrogram_artifacts(run_dir: Path, manifest: dict[str, Any]) -> dict[str, Path | None]:
@@ -190,6 +218,7 @@ def _load_collection_child_bundle(run_dir: Path) -> DashboardRunBundle:
         summaries=summaries.copy(),
         features=features.copy(),
         window_metrics=window_metrics.copy(),
+        score_comparison_path=_resolve_score_comparison_path(run_dir),
         linkage_matrix_path=artifacts["linkage_matrix_path"],
         dendrogram_meta_path=artifacts["dendrogram_meta_path"],
         dendrogram_png_path=artifacts["dendrogram_png_path"],
@@ -321,6 +350,7 @@ def _load_cluster_collection_run(run_dir: Path) -> DashboardRunBundle:
         features=pd.DataFrame(),
         window_metrics=pd.DataFrame(),
         cluster_run_dirs_by_k={int(_selected_k_from_manifest(manifest) or -1): child_dir for child_dir, manifest in child_entries},
+        score_comparison_path=_resolve_score_comparison_path(run_dir),
     )
 
 
@@ -355,6 +385,7 @@ def load_dashboard_run(run_dir: Path) -> DashboardRunBundle:
             summaries=summaries,
             features=features,
             window_metrics=window_metrics,
+            score_comparison_path=_resolve_score_comparison_path(run_dir),
             linkage_matrix_path=artifacts["linkage_matrix_path"],
             dendrogram_meta_path=artifacts["dendrogram_meta_path"],
             dendrogram_png_path=artifacts["dendrogram_png_path"],

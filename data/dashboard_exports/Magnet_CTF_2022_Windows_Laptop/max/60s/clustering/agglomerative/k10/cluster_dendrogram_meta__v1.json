@@ -1,25 +1,14 @@
 {
-  "enabled": true,
-  "scope": "per_dataset",
-  "allowed_scopes": [
-    "per_dataset"
-  ],
-  "rows": 4745,
-  "max_rows": 20000,
+  "render_style_version": 3,
   "method": "agglomerative",
   "linkage": "ward",
-  "top_levels": 10,
-  "display_levels": 2,
-  "render_style_version": 9,
   "selected_k": 10,
   "cut_mode": "k",
   "cut_value": 10.0,
+  "display_levels": 2,
   "resolved_cut_height": null,
-  "truncation_strategy": "unknown",
-  "levels_below_cut": 2,
-  "display_leaf_count": 0,
-  "display_internal_count": 0,
   "written": false,
   "written_cut_level": false,
-  "skip_reason": "dendrogram_error: RecursionError"
+  "skip_reason": "dendrogram_error: RecursionError",
+  "linkage_matrix_file": "cluster_linkage_matrix__v1.npy"
 }

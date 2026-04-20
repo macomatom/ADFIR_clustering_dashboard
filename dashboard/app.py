@@ -22,6 +22,7 @@ from dashboard.clustering_service import (
     get_assignments,
     get_available_k,
     get_cluster_detail_rows,
+    get_cluster_score_comparison,
     get_cluster_summary,
     get_cluster_top_features,
 )
@@ -37,6 +38,7 @@ from dashboard.ui_helpers import (
     render_cluster_detail_table_html,
     render_cluster_label_with_color,
     render_cluster_detail_table,
+    render_cluster_score_comparison_table,
     render_cluster_summary_dataframe,
     render_cluster_summary_context,
     render_feature_overview_table,
@@ -85,6 +87,33 @@ def _resolve_selected_run_dir(run_dir: str, n_clusters: int) -> str:
     child_map = bundle.cluster_run_dirs_by_k or {}
     selected_run_dir = child_map.get(int(n_clusters))
     return str(selected_run_dir or bundle.run_dir)
+
+
+@st.cache_data(show_spinner=False)
+def _get_cached_score_comparison(run_dir: str, n_clusters: int) -> tuple[pd.DataFrame, str | None]:
+    bundle = _load_bundle(run_dir)
+    return get_cluster_score_comparison(bundle, selected_k=n_clusters)
+
+
+def _style_score_comparison_table(score_df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    display_df = render_cluster_score_comparison_table(score_df)
+    display_df = sanitize_for_streamlit(display_df)
+
+    def _highlight_current(row: pd.Series) -> list[str]:
+        is_selected = False
+        if "selected" in row.index:
+            is_selected = str(row["selected"]).strip().lower() == "current"
+        style = "background-color: rgba(255, 235, 59, 0.22); font-weight: 600;" if is_selected else ""
+        return [style] * len(row)
+
+    return display_df.style.apply(_highlight_current, axis=1).format(
+        {
+            "silhouette_score": "{:.6f}",
+            "davies_bouldin_score": "{:.6f}",
+            "calinski_harabasz_score": "{:.6f}",
+        },
+        na_rep="",
+    )
 
 
 def _resolve_default_run(root: Path) -> str:
@@ -551,6 +580,34 @@ def main() -> None:
                         caption=f"Dendrogram with cut overlay for k={n_clusters}",
                         width="stretch",
                     )
+
+        st.subheader("Clustering score comparison")
+        st.caption(
+            "Silhouette score: higher is better; measures cluster compactness and separation. "
+            "Davies-Bouldin score: lower is better; measures intra-cluster spread relative to inter-cluster separation. "
+            "Calinski-Harabasz score: higher is better; measures between-cluster separation relative to within-cluster dispersion."
+        )
+        score_comparison_df, score_comparison_error = _get_cached_score_comparison(run_dir, n_clusters)
+        if score_comparison_error:
+            st.info(score_comparison_error)
+        elif score_comparison_df.empty:
+            st.info("No clustering score comparison rows are available for this run.")
+        else:
+            st.dataframe(
+                _style_score_comparison_table(score_comparison_df),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "selected_k": st.column_config.NumberColumn("selected_k", format="%d"),
+                    "selected": st.column_config.TextColumn("selected", width="medium"),
+                    "silhouette_score": st.column_config.NumberColumn("silhouette_score", width="large"),
+                    "silhouette_rank": st.column_config.NumberColumn("silhouette_rank", format="%d", width="medium"),
+                    "davies_bouldin_score": st.column_config.NumberColumn("davies_bouldin_score", width="large"),
+                    "davies_bouldin_rank": st.column_config.NumberColumn("davies_bouldin_rank", format="%d", width="medium"),
+                    "calinski_harabasz_score": st.column_config.NumberColumn("calinski_harabasz_score", width="large"),
+                    "calinski_harabasz_rank": st.column_config.NumberColumn("calinski_harabasz_rank", format="%d", width="medium"),
+                },
+            )
 
     with entropy_tab:
         st.subheader("Shannon Entropy Over Time")
