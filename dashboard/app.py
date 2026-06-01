@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from dashboard.clustering_service import (
 )
 from dashboard.data_loader import DashboardRunBundle, DashboardRunOption, discover_dashboard_run_options, discover_dashboard_runs, load_dashboard_run
 from dashboard.dendrogram_runtime import ensure_dendrogram_artifacts
+from dashboard.exporters import build_cluster_export_filename, build_cluster_export_payload
 from dashboard.grid_helpers import aggrid_available, render_feature_aggrid
 from dashboard.plots import build_entropy_plot, build_timeline_plot
 from dashboard.ui_helpers import (
@@ -93,6 +95,14 @@ def _resolve_selected_run_dir(run_dir: str, n_clusters: int) -> str:
 def _get_cached_score_comparison(run_dir: str, n_clusters: int) -> tuple[pd.DataFrame, str | None]:
     bundle = _load_bundle(run_dir)
     return get_cluster_score_comparison(bundle, selected_k=n_clusters)
+
+
+@st.cache_data(show_spinner=False)
+def _get_cached_cluster_export(run_dir: str, n_clusters: int) -> tuple[str, str]:
+    bundle = _load_bundle(run_dir)
+    payload = build_cluster_export_payload(bundle, n_clusters)
+    filename = build_cluster_export_filename(bundle, n_clusters)
+    return json.dumps(payload, indent=2, ensure_ascii=True), filename
 
 
 def _style_score_comparison_table(score_df: pd.DataFrame) -> pd.io.formats.style.Styler:
@@ -417,6 +427,15 @@ def main() -> None:
         with st.expander("Run context", expanded=False):
             context_view = sanitize_for_streamlit(render_cluster_summary_context(summary))
             st.dataframe(context_view, width="stretch", hide_index=True)
+
+        export_json, export_filename = _get_cached_cluster_export(run_dir, n_clusters)
+        st.download_button(
+            "Export clusters JSON",
+            data=export_json,
+            file_name=export_filename,
+            mime="application/json",
+            key=f"export_clusters_json_{run_dir}_{n_clusters}",
+        )
 
         st.subheader("Cluster summary")
         summary_view = sanitize_for_streamlit(render_cluster_summary_dataframe(summary))

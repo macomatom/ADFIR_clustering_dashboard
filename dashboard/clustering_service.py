@@ -295,7 +295,7 @@ def _build_boundary_metrics(assignments_df: pd.DataFrame, summary_df: pd.DataFra
     return out.merge(metrics_df, on="cluster_id", how="left")
 
 
-def get_cluster_detail_rows(bundle: DashboardRunBundle, n_clusters: int, cluster_id: int, *, limit: int = 50) -> tuple[pd.DataFrame, int]:
+def get_cluster_detail_rows(bundle: DashboardRunBundle, n_clusters: int, cluster_id: int, *, limit: int | None = 50) -> tuple[pd.DataFrame, int]:
     assignments = get_assignments(bundle, n_clusters)
     if assignments.empty:
         return assignments, 0
@@ -325,7 +325,7 @@ def get_cluster_detail_rows(bundle: DashboardRunBundle, n_clusters: int, cluster
     ]
     detail = _sort_cluster_detail_rows(detail, time_col=time_col)
     total_rows = int(len(detail))
-    limited = detail.head(int(limit)).reset_index(drop=True)
+    limited = detail.head(int(limit)).reset_index(drop=True) if limit is not None else detail.reset_index(drop=True)
     return limited, total_rows
 
 
