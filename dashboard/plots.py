@@ -96,7 +96,50 @@ def _compute_bar_width_values(x_values: pd.Series, *, window_s: int | None, bar_
     return None
 
 
-def _compress_timeline_rows(df: pd.DataFrame, *, window_s: int | None, max_bars: int) -> pd.DataFrame:
+def _choose_bucket_cluster(
+    bucket_df: pd.DataFrame,
+    *,
+    highlighted_clusters: set[int] | None,
+) -> tuple[int | None, pd.DataFrame]:
+    present = bucket_df[~bucket_df["_is_missing"]].copy() if "_is_missing" in bucket_df.columns else bucket_df.copy()
+    if present.empty:
+        return None, present
+    cluster_ids = pd.to_numeric(present["cluster_id"], errors="coerce")
+    present = present.loc[cluster_ids.notna()].copy()
+    if present.empty:
+        return None, present
+    present["_cluster_id_int"] = pd.to_numeric(present["cluster_id"], errors="coerce").astype(int)
+
+    candidate_df = present
+    highlighted = set(int(cluster_id) for cluster_id in (highlighted_clusters or set()))
+    if highlighted:
+        highlighted_df = present[present["_cluster_id_int"].isin(highlighted)].copy()
+        if not highlighted_df.empty:
+            candidate_df = highlighted_df
+
+    counts = candidate_df["_cluster_id_int"].value_counts()
+    if counts.empty:
+        return None, candidate_df
+    top_count = int(counts.iloc[0])
+    tied_clusters = set(counts[counts == top_count].index.astype(int).tolist())
+    if len(tied_clusters) == 1:
+        return int(next(iter(tied_clusters))), candidate_df
+
+    time_sort_col = "_x_num" if "_x_num" in candidate_df.columns else "timeline_x"
+    earliest = candidate_df.sort_values([time_sort_col], ascending=[True], na_position="last")
+    for cluster_id in earliest["_cluster_id_int"].tolist():
+        if int(cluster_id) in tied_clusters:
+            return int(cluster_id), candidate_df
+    return int(counts.index[0]), candidate_df
+
+
+def _compress_timeline_rows(
+    df: pd.DataFrame,
+    *,
+    window_s: int | None,
+    max_bars: int,
+    highlighted_clusters: set[int] | None = None,
+) -> pd.DataFrame:
     if df.empty or len(df) <= max_bars:
         return df
     work = df.copy()
@@ -161,13 +204,11 @@ def _compress_timeline_rows(df: pd.DataFrame, *, window_s: int | None, max_bars:
                 row["timeline_x"] = pd.to_datetime(bucket_center_num, unit="ns", errors="coerce")
             else:
                 row["timeline_x"] = float(bucket_center_num)
-            present = bucket_df[~bucket_df["_is_missing"]].copy() if "_is_missing" in bucket_df.columns else bucket_df.copy()
-            cluster_mode = pd.to_numeric(present["cluster_id"], errors="coerce").dropna().astype(int).mode()
-            if not cluster_mode.empty:
-                chosen_cluster = int(cluster_mode.iloc[0])
+            chosen_cluster, candidate_df = _choose_bucket_cluster(bucket_df, highlighted_clusters=highlighted_clusters)
+            if chosen_cluster is not None:
                 row["cluster_id"] = chosen_cluster
-                if "_color" in present.columns:
-                    match = present[pd.to_numeric(present["cluster_id"], errors="coerce").fillna(-1).astype(int) == chosen_cluster]
+                if "_color" in candidate_df.columns:
+                    match = candidate_df[candidate_df["_cluster_id_int"] == chosen_cluster]
                     if not match.empty:
                         row["_color"] = match.iloc[0]["_color"]
             row["_is_missing"] = False
@@ -423,7 +464,12 @@ def build_timeline_plot(
     if not should_render_full_detail:
         missing_df = _compress_timeline_rows(missing_df, window_s=window_s, max_bars=missing_bar_budget)
         missing_df = _coarsen_missing_gaps(missing_df, window_s=window_s)
-        present_df = _compress_timeline_rows(present_df, window_s=window_s, max_bars=present_bar_budget)
+        present_df = _compress_timeline_rows(
+            present_df,
+            window_s=window_s,
+            max_bars=present_bar_budget,
+            highlighted_clusters=highlighted,
+        )
 
     missing_width_default = (
         missing_df["_bar_width"].tolist()
@@ -490,17 +536,19 @@ def build_timeline_plot(
         fig.add_trace(separator_trace)
         separator_trace_index = len(fig.data) - 1
 
-    fig.add_trace(
-        go.Scatter(
-            x=[None],
-            y=[None],
-            mode="markers",
-            name="missing data",
-            marker={"size": 10, "color": "rgb(220,220,220)"},
-            hoverinfo="skip",
+    legend_cluster_ids = sorted(highlighted) if highlighted else cluster_ids
+    if not highlighted:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                name="missing data",
+                marker={"size": 10, "color": "rgb(220,220,220)"},
+                hoverinfo="skip",
+            )
         )
-    )
-    for cluster_id in cluster_ids:
+    for cluster_id in legend_cluster_ids:
         fig.add_trace(
             go.Scatter(
                 x=[None],
