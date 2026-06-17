@@ -28,7 +28,7 @@ REQUIRED_FEATURE_COLS = {"n_clusters", "cluster_id", "rank", "feature_name", "de
 PREFERRED_FEATURE_COLS = {"global_std", "score_std", "direction"}
 REQUIRED_WINDOW_METRIC_COLS = {"window_id", "row_idx"}
 REQUIRED_SCORE_COMPARISON_COLS = {"selected_k", "silhouette_score", "davies_bouldin_score", "calinski_harabasz_score"}
-EXCLUDED_ARTIFACTS = {"SSS_DC", "SSS_Desktop"}
+EXCLUDED_ARTIFACTS: set[str] = set()
 SCORE_COMPARISON_FILENAME = "cluster_score_comparison__v1.xlsx"
 SCORE_COMPARISON_SHEET = "score_comparison"
 
@@ -94,6 +94,20 @@ def _read_table_cached(path_str: str) -> pd.DataFrame:
 @lru_cache(maxsize=256)
 def _read_excel_cached(path_str: str, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(Path(path_str), sheet_name=sheet_name)
+
+
+def _cluster_run_cache_token(run_dir: Path) -> str:
+    candidates = [
+        run_dir / "cluster_manifest__v1.json",
+        run_dir / "cluster_assignments__v1.parquet",
+        run_dir / "cluster_summary__v1.csv",
+        run_dir / "cluster_features__v1.csv",
+    ]
+    existing = [path for path in candidates if path.exists()]
+    if not existing:
+        return ""
+    parts = [f"{path.name}:{path.stat().st_mtime_ns}:{path.stat().st_size}" for path in existing]
+    return "|".join(parts)
 
 
 def _optional_artifact_path(run_dir: Path, filename: str | None) -> Path | None:
@@ -180,7 +194,10 @@ def _selected_k_from_manifest(manifest: dict[str, Any]) -> int | None:
 
 
 @lru_cache(maxsize=256)
-def _cached_cluster_run_tables(run_dir_str: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+def _cached_cluster_run_tables(
+    run_dir_str: str,
+    cache_token: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     run_dir = Path(run_dir_str)
     manifest = _load_manifest(run_dir / "cluster_manifest__v1.json")
     assignments = _normalize_assignments(_read_table_cached(str(run_dir / "cluster_assignments__v1.parquet")), manifest)
@@ -204,7 +221,10 @@ def _cached_cluster_run_tables(run_dir_str: str) -> tuple[pd.DataFrame, pd.DataF
 
 
 def _load_collection_child_bundle(run_dir: Path) -> DashboardRunBundle:
-    assignments, summaries, features, window_metrics, manifest = _cached_cluster_run_tables(str(run_dir))
+    assignments, summaries, features, window_metrics, manifest = _cached_cluster_run_tables(
+        str(run_dir),
+        _cluster_run_cache_token(run_dir),
+    )
     artifacts = _detect_dendrogram_artifacts(run_dir, manifest)
     _validate_required_columns(assignments, REQUIRED_ASSIGNMENT_COLS, "assignments")
     _validate_required_columns(summaries, REQUIRED_SUMMARY_COLS, "summaries")

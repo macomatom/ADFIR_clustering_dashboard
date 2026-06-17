@@ -49,19 +49,45 @@ from dashboard.ui_helpers import (
 
 
 @st.cache_data(show_spinner=False)
-def _load_bundle(run_dir: str) -> DashboardRunBundle:
+def _load_bundle(run_dir: str, cache_token: str) -> DashboardRunBundle:
     return load_dashboard_run(Path(run_dir))
+
+
+def _run_cache_token(run_dir: str) -> str:
+    root = Path(run_dir)
+    candidates = [
+        root / "dashboard_manifest__v1.json",
+        root / "cluster_manifest__v1.json",
+        root / "cluster_assignments__v1.parquet",
+        root / "cluster_summary__v1.csv",
+        root / "cluster_features__v1.csv",
+    ]
+    if root.exists() and root.is_dir():
+        for child in root.iterdir():
+            if child.is_dir():
+                candidates.extend(
+                    [
+                        child / "cluster_manifest__v1.json",
+                        child / "cluster_assignments__v1.parquet",
+                        child / "cluster_summary__v1.csv",
+                        child / "cluster_features__v1.csv",
+                    ]
+                )
+    existing = [path for path in candidates if path.exists()]
+    if not existing:
+        return ""
+    return "|".join(f"{path}:{path.stat().st_mtime_ns}:{path.stat().st_size}" for path in existing)
 
 
 @st.cache_data(show_spinner=False)
 def _get_cached_all_features(run_dir: str, n_clusters: int) -> pd.DataFrame:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     return get_all_cluster_top_features(bundle, n_clusters)
 
 
 @st.cache_data(show_spinner=False)
 def _get_cached_invariant_timeline(run_dir: str, n_clusters: int, time_col: str) -> pd.DataFrame:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     invariant_source = get_assignments(bundle, n_clusters).copy()
     dedupe_cols = [col for col in [time_col, "row_idx", "window_id"] if col in invariant_source.columns]
     if dedupe_cols:
@@ -71,21 +97,21 @@ def _get_cached_invariant_timeline(run_dir: str, n_clusters: int, time_col: str)
 
 @st.cache_data(show_spinner=False)
 def _get_cached_present_timeline(run_dir: str, n_clusters: int, time_col: str) -> pd.DataFrame:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     assignments = get_assignments(bundle, n_clusters).copy()
     return build_timeline_df(assignments, time_col=time_col)
 
 
 @st.cache_data(show_spinner=False)
 def _get_cached_timeline_defaults(run_dir: str, n_clusters: int, time_col: str, window_s: int) -> dict[str, Any]:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     assignments = get_assignments(bundle, n_clusters).copy()
     return get_default_timeline_viewport(assignments, time_col=time_col, window_s=window_s)
 
 
 @st.cache_data(show_spinner=False)
 def _resolve_selected_run_dir(run_dir: str, n_clusters: int) -> str:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     child_map = bundle.cluster_run_dirs_by_k or {}
     selected_run_dir = child_map.get(int(n_clusters))
     return str(selected_run_dir or bundle.run_dir)
@@ -93,13 +119,13 @@ def _resolve_selected_run_dir(run_dir: str, n_clusters: int) -> str:
 
 @st.cache_data(show_spinner=False)
 def _get_cached_score_comparison(run_dir: str, n_clusters: int) -> tuple[pd.DataFrame, str | None]:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     return get_cluster_score_comparison(bundle, selected_k=n_clusters)
 
 
 @st.cache_data(show_spinner=False)
 def _get_cached_cluster_export(run_dir: str, n_clusters: int) -> tuple[str, str]:
-    bundle = _load_bundle(run_dir)
+    bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     payload = build_cluster_export_payload(bundle, n_clusters)
     filename = build_cluster_export_filename(bundle, n_clusters)
     return json.dumps(payload, indent=2, ensure_ascii=True), filename
@@ -304,7 +330,7 @@ def main() -> None:
         return
 
     try:
-        bundle = _load_bundle(run_dir)
+        bundle = _load_bundle(run_dir, _run_cache_token(run_dir))
     except Exception as exc:  # noqa: BLE001
         st.error(f"Unable to load dashboard run: {type(exc).__name__}: {exc}")
         return
@@ -568,7 +594,7 @@ def main() -> None:
 
         st.subheader("Dendrogram")
         selected_run_dir = _resolve_selected_run_dir(run_dir, n_clusters)
-        selected_run_bundle = _load_bundle(selected_run_dir)
+        selected_run_bundle = _load_bundle(selected_run_dir, _run_cache_token(selected_run_dir))
         if selected_run_bundle.linkage_matrix_path is None:
             st.info("This export does not include dendrogram linkage data yet. Regenerate and sync the run with `cluster_linkage_matrix__v1.npy`.")
         else:
